@@ -48,32 +48,51 @@ namespace OwMapCreation
         // so the asymmetric noise on the east half is simply overwritten.
         private bool mVaried;
         private int mSalt;                 // seeds the value-noise lattice
-        private double mBayHalf, mBayRise, mSpurOff, mSpurOutW, mSpurInW, mRidge;
+        private double mBayHalf, mBayWobble, mBayReachFrac;
         private double mNoiseAmp, mNoiseFreq, mGorgeHalf, mMoatHalf, mMoatE;
-        private double mIslandR, mIslandMoat;
+        private double mIslandR, mIslandMoat, mRangeRough;
         private int mIslandY;
+        // a VARIABLE set of mountain spurs (count + per-spur offset/height/width)
+        private int mNumSpurs;
+        private double[] mSpurOff, mSpurH, mSpurOutW, mSpurInW;
 
         // Draw the gen's variation once and cache it, so the GenerateLand stamp
         // and every later re-stamp (SetUnreachableAreas) use identical terrain.
+        // Ranges are deliberately wide — the archetype (north range, south sea,
+        // central bay, island, moat) is structural, but everything else swings a
+        // lot so no two gens read alike.
         private void EnsureVariation()
         {
             if (mVaried) return;
             mVaried = true;
             mSalt       = random.Next(1 << 30);
-            mBayHalf    = RD(0.12, 0.18);   // estuary width
-            mBayRise    = RD(8.0, 12.0);    // how far the bay drowns inland
-            mSpurOff    = RD(0.15, 0.21);   // spur distance from centre
-            mSpurOutW   = RD(3.0, 4.6);     // outer (curved) spur half-width
-            mSpurInW    = RD(1.0, 1.7);     // inner (sharp) spur half-width
-            mRidge      = RD(13.0, 19.0);   // spur height
-            mNoiseAmp   = RD(2.8, 4.4);     // organic relief
-            mNoiseFreq  = RD(0.085, 0.16);  // organic feature scale
-            mGorgeHalf  = RD(0.09, 0.14);   // width of the breach in the range
-            mMoatHalf   = RD(0.17, 0.23);   // floodplain band width
-            mMoatE      = RD(3.0, 5.0);     // floodplain depth cut-off
-            mIslandR    = RD(3.0, 4.0);     // island size
-            mIslandMoat = RD(1.3, 1.8);     // island's water ring
-            mIslandY    = 6 + random.Next(4); // island row, 6..9 (in the bay)
+            mBayHalf    = RD(0.10, 0.20);   // estuary mouth half-width
+            mBayReachFrac = RD(0.50, 0.72); // how far up the map the bay cuts (½–⅔)
+            mBayWobble  = RD(0.0, 0.55);    // how much the channel width breathes with latitude
+            mNoiseAmp   = RD(3.8, 6.5);     // organic relief (rough coastline & hills)
+            mNoiseFreq  = RD(0.07, 0.16);   // organic feature scale
+            mGorgeHalf  = RD(0.07, 0.15);   // width of the breach in the range
+            mMoatHalf   = RD(0.14, 0.26);   // floodplain band width
+            mMoatE      = RD(2.5, 5.5);     // floodplain depth cut-off
+            mIslandR    = RD(2.8, 4.2);     // island size
+            mIslandMoat = RD(1.2, 2.0);     // island's water ring
+            mIslandY    = 5 + random.Next(6); // island row, 5..10 (in the bay)
+            mRangeRough = RD(0.0, 4.0);     // how jaggedly the range edge dips south
+
+            // 2–4 spurs at random offsets from centre (never in the central
+            // gorge), each its own height and asymmetric width.
+            mNumSpurs = 2 + random.Next(3);
+            mSpurOff = new double[mNumSpurs];
+            mSpurH = new double[mNumSpurs];
+            mSpurOutW = new double[mNumSpurs];
+            mSpurInW = new double[mNumSpurs];
+            for (int i = 0; i < mNumSpurs; i++)
+            {
+                mSpurOff[i]  = RD(0.10, 0.42);  // distance from centre (frac of W)
+                mSpurH[i]    = RD(11.0, 20.0);  // spur height
+                mSpurOutW[i] = RD(2.4, 5.2);    // outer (curved) half-width
+                mSpurInW[i]  = RD(0.9, 1.8);    // inner (sharp) half-width
+            }
         }
 
         // A seeded random double in [lo, hi).
@@ -165,6 +184,64 @@ namespace OwMapCreation
         protected override void GenerateMountains() { }
         protected override void ModifyTerrain() { }
         protected override void SmoothTerrain() { }
+
+        // Let the engine place its sites, then GUARANTEE one on the volcanic
+        // island — it's a central prize and must always be foundable, but the
+        // engine sometimes skips it because the island is sea-locked. Done here
+        // (in AddCities) so the engine's later passes (resources, closest-city,
+        // mirror) treat it like any other site.
+        protected override bool AddCities()
+        {
+            bool ok = base.AddCities();
+            EnsureIslandCitySite();
+            return ok;
+        }
+
+        private void EnsureIslandCitySite()
+        {
+            int W = MapWidth, H = MapHeight;
+            CitySiteType none = GetTile(0, 0).CitySite;
+
+            // already a site on/around the island? nothing to do.
+            CitySiteType sample = none;
+            for (int i = 0; i < W * H; i++)
+            {
+                CitySiteType cs = GetTile(i).CitySite;
+                if (cs.Equals(none)) continue;
+                if (sample.Equals(none)) sample = cs;                 // a usable site type
+                int x = i % W, y = i / W;
+                if (OnIsland(x, y)) return;                            // island already has one
+            }
+            if (sample.Equals(none)) return;                          // no sites at all (shouldn't happen)
+
+            // Prefer the dead-centre self-mirror tile (odd row, x=W/2): a single
+            // fair island site that mirrors to itself. Pick the foundable island
+            // tile (flat/hill land, not the volcano) closest to the island centre.
+            int bx = -1, by = -1; double best = 1e9;
+            for (int y = 0; y < H; y++)
+            {
+                if ((y % 2) == 0) continue;                           // self-mirror rows only
+                int x = W / 2;
+                if (!OnIsland(x, y)) continue;
+                TileData t = GetTile(x, y);
+                if (t.Terrain.Equals(WATER_TERRAIN)) continue;
+                if (t.Height.Equals(VOLCANO_HEIGHT) || t.Height.Equals(MOUNTAIN_HEIGHT)) continue;
+                double d = Math.Abs(y - mIslandY);
+                if (d < best) { best = d; bx = x; by = y; }
+            }
+            // fallback: any foundable island tile on the west half (MirrorGameplay
+            // copies it east, giving a symmetric pair).
+            for (int y = 0; y < H && bx < 0; y++)
+                for (int x = 0; x < W / 2 && bx < 0; x++)
+                {
+                    if (!OnIsland(x, y)) continue;
+                    TileData t = GetTile(x, y);
+                    if (t.Terrain.Equals(WATER_TERRAIN)) continue;
+                    if (t.Height.Equals(VOLCANO_HEIGHT) || t.Height.Equals(MOUNTAIN_HEIGHT)) continue;
+                    bx = x; by = y;
+                }
+            if (bx >= 0) GetTile(bx, by).CitySite = sample;
+        }
 
         // Tribes: exactly one DIPLOMACY tribe per player — a DIFFERENT one each
         // side, placed at mirror positions (so the layout is fair but the two
@@ -409,47 +486,61 @@ namespace OwMapCreation
             }
         }
 
+        private static double Smoothstep(double t)
+        {
+            if (t <= 0) return 0; if (t >= 1) return 1; return t * t * (3 - 2 * t);
+        }
+
         // Continuous height at (x, y). x grows east, y grows north (y=0 = south
-        // sea edge). Even in x about the centre column ⇒ left-right symmetric.
+        // sea edge). Left-right symmetry is enforced afterwards by MirrorGameplay,
+        // so the raw-x noise here may be asymmetric (the east half is overwritten).
         private double Height(int x, int y, int W, int H)
         {
             double cx = (W - 1) / 2.0;
-            double xs = x - cx;
-            // Base rises from the sea but plateaus at highland level — no thick
-            // horizontal mountain band; the mountains come from the spurs.
+            double xs = x - cx, axs = Math.Abs(xs);
+            // Base rises from the sea but plateaus at highland level.
             double slope = Math.Min(y - SEA_ROWS, NORTH_PLATEAU);
 
-            double bayHalf = W * mBayHalf;
-            double trunk = mBayRise * Math.Max(0.0, 1.0 - Math.Abs(xs) / bayHalf);
+            // --- the drowned central channel: a real estuary that cuts deep ---
+            // Wide at the mouth, tapering as it climbs to ~½–⅔ of the map height,
+            // its width breathing with latitude. The trunk is deep enough to beat
+            // the rising slope, so the channel is genuinely WATER, not just low
+            // land — the bay really bites into the continent.
+            double bayReach = SEA_ROWS + mBayReachFrac * (H - 1 - SEA_ROWS);
+            double hf = Math.Min(1.0, Math.Max(0.0, (y - SEA_ROWS) / Math.Max(1.0, bayReach - SEA_ROWS))); // 0 mouth → 1 head
+            double wob = 1.0 + mBayWobble * Fbm(y * 0.13 + 3.1, 1.7);
+            double bayHalf = Math.Max(1.5, W * mBayHalf * wob * (1.0 - 0.7 * hf));   // narrows inland
+            double across = Math.Max(0.0, 1.0 - axs / bayHalf);
+            double trunk = 24.0 * across * Smoothstep((1.0 - hf) / 0.25);            // fades out near the head
 
             double denom = Math.Max(1, H - 1 - SEA_ROWS);
-            double north = Math.Min(1.0, Math.Max(0.0, (y - SEA_ROWS) / denom));  // 0 coast → 1 top
+            double north = Math.Min(1.0, Math.Max(0.0, (y - SEA_ROWS) / denom));     // 0 coast → 1 top
             double taper = Math.Pow(north, SPUR_REACH);
 
-            // Two spurs (mirror pair) flanking the bay. Each is an ASYMMETRIC
-            // triangle: a SHARP drop on the inner (bay-facing) side, a smooth
-            // parabolic CURVE on the outer side; widening toward the range. The
-            // spur centre itself wanders with the seeded noise, so the spurs
-            // aren't two identical bumps every game.
-            double wander = mNoiseAmp * 0.6 * Fbm(x * 0.05 + 31.7, y * 0.05 + 8.4);
-            double off = Math.Abs(xs) - W * mSpurOff + wander;        // <0 inner (toward bay), >0 outer
-            double w = (off >= 0 ? mSpurOutW : mSpurInW) * (0.5 + 2.0 * north);
-            double spur = Math.Exp(-(off * off) / (w * w));
+            // --- a VARIABLE set of mountain spurs (count/offset/height/width all
+            // per-gen), each an asymmetric finger; take the tallest at this tile.
+            double ridge = 0;
+            for (int i = 0; i < mNumSpurs; i++)
+            {
+                double off = axs - W * mSpurOff[i];                  // <0 inner, >0 outer
+                double w = (off >= 0 ? mSpurOutW[i] : mSpurInW[i]) * (0.5 + 2.0 * north);
+                ridge = Math.Max(ridge, mSpurH[i] * Math.Exp(-(off * off) / (w * w)));
+            }
+            ridge *= taper;
 
-            // seeded fractal noise → an organic, per-gen coastline & relief.
-            // Fade it in from the sea so the southern deep-water rows stay solidly
-            // sea while the coastline (and everything inland) varies. (Harsh
-            // land/water edges are fixed by FixCoast; symmetry by MirrorGameplay.)
-            double fade = Math.Min(1.0, y / (double)SEA_ROWS);
+            // --- organic relief & a ragged, meandering coastline ---
+            // Strong seeded fBm, active from the coast up (the deep-sea floor
+            // below y≈2 stays clean so the bottom edge is solid sea).
+            double fade = Math.Min(1.0, Math.Max(0.0, (y - 2) / 6.0));
             double n = Fbm(x * mNoiseFreq + 11.3, y * mNoiseFreq + 5.7);
 
-            double e = slope - trunk + mRidge * spur * taper + mNoiseAmp * n * fade;
+            double e = slope - trunk + ridge + mNoiseAmp * n * fade;
 
-            // mountain range along the top — but NOT through the central gorge
-            // (where the river/bay breaches the range). The gorge edges wobble
-            // with the noise so the breach isn't a clean rectangle every time.
+            // --- top range: a wobbly southern edge + a central gorge breach
+            // (where the river/bay exits the range), both jittered by the noise. ---
             double gorge = W * mGorgeHalf + 1.5 * Fbm(x * 0.2 + 2.0, y * 0.2 + 9.0);
-            if (y >= H - RANGE_ROWS && Math.Abs(xs) > gorge)
+            double rangeEdge = (H - 1) - (RANGE_ROWS - 1) - mRangeRough * Math.Max(0.0, Fbm(x * 0.18 + 7.0, 1.3));
+            if (y >= rangeEdge && axs > gorge)
                 e = Math.Max(e, MTN_E + 4);
             return e;
         }
@@ -555,8 +646,12 @@ namespace OwMapCreation
 
             double coast = Math.Max(0.0, 1.2 - (y - SEA_ROWS) / 5.0);          // wet near the south sea
             double estuary = Math.Max(0.0, 1.0 - Math.Abs(xs) / (W * 0.22)) * (1.0 - mid);
-            double dSpur = Math.Abs(Math.Abs(xs) - W * mSpurOff);
-            double dry = Math.Exp(-(dSpur * dSpur) / (mSpurOutW * mSpurOutW)) * mid;  // rain shadow on the spurs
+            double dry = 0;                                                    // rain shadow on the spurs
+            for (int i = 0; i < mNumSpurs; i++)
+            {
+                double dSpur = Math.Abs(Math.Abs(xs) - W * mSpurOff[i]);
+                dry = Math.Max(dry, Math.Exp(-(dSpur * dSpur) / (mSpurOutW[i] * mSpurOutW[i])) * mid);
+            }
             double noise = 0.18 * Fbm(x * 0.13 + 60.0, y * 0.13 + 17.0);       // seeded climate variation
             double moisture = 0.45 + Math.Max(coast, estuary) - 0.7 * dry + noise; // temperate baseline
 
