@@ -5,7 +5,7 @@ duel map built around a drowned river estuary.
 
 ![Caldera Bay gens](atlas/maps/Caldera_Bay_smallest_1.png)
 
-> Browse twelve generations in [`atlas/index.html`](atlas/index.html) (open it locally).
+> **[Browse twelve generations in the live atlas →](https://alcaras.github.io/MapGen_CalderaBay/atlas/)**
 
 ## The map
 
