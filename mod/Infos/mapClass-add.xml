@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<!-- Register the custom script. The game/owmapgen build their script
+     registry from mapClass entries: <zScriptType> MUST be the C# class
+     name (MapScriptFlatLush) — that is how a display name binds to a
+     class. (<Class> is NOT a real field and is ignored.) <Name> is the
+     text key shown in the New Game map list. bAllowMirror=1 lets the
+     Mirror / Point-symmetry toggles appear in multiplayer. -->
+<Root>
+  <Entry>
+    <zType>MAPCLASS_FLATLUSH</zType>
+    <Name>TEXT_MAPCLASS_FLATLUSH</Name>
+    <Help>TEXT_MAPCLASS_FLATLUSH_HELP</Help>
+    <zScriptType>MapScriptFlatLush</zScriptType>
+    <bAllowMirror>1</bAllowMirror>
+  </Entry>
+  <Entry>
+    <zType>MAPCLASS_CALDERABAY</zType>
+    <Name>TEXT_MAPCLASS_CALDERABAY</Name>
+    <Help>TEXT_MAPCLASS_CALDERABAY_HELP</Help>
+    <zScriptType>MapScriptCalderaBay</zScriptType>
+    <bAllowMirror>1</bAllowMirror>
+  </Entry>
+</Root>

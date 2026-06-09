@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<!-- Individual choices for Caldera Bay's multiple-choice map options. -->
+<Root>
+  <Entry>
+    <zType>MAP_OPTION_CALDERA_RANDOM</zType>
+    <Name>TEXT_MAP_OPTION_CALDERA_RANDOM</Name>
+  </Entry>
+  <Entry>
+    <zType>MAP_OPTION_CALDERA_MARSH</zType>
+    <Name>TEXT_MAP_OPTION_CALDERA_MARSH</Name>
+  </Entry>
+  <Entry>
+    <zType>MAP_OPTION_CALDERA_DESERT</zType>
+    <Name>TEXT_MAP_OPTION_CALDERA_DESERT</Name>
+  </Entry>
+</Root>

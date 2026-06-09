@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<Root>
+  <Entry><zType>TEXT_MAPCLASS_FLATLUSH</zType><en-US>Flat Lush</en-US></Entry>
+  <Entry><zType>TEXT_MAPCLASS_FLATLUSH_HELP</zType><en-US>A completely flat, all-lush square of land — no water, hills, mountains, rivers, or forests. A deliberately boring sandbox.</en-US></Entry>
+  <Entry><zType>TEXT_MAPCLASS_CALDERABAY</zType><en-US>Caldera Bay</en-US></Entry>
+  <Entry><zType>TEXT_MAPCLASS_CALDERABAY_HELP</zType><en-US>A mirror duel across a drowned river estuary: a northern mountain range shedding rivers into a central bay, foothill spurs and passes, a marsh-or-desert moat, and a volcanic island prize in the bay. Capitals on opposite sides.</en-US></Entry>
+  <Entry><zType>TEXT_MAP_OPTIONS_MULTI_CALDERA_MOAT</zType><en-US>Estuary Floodplain</en-US></Entry>
+  <Entry><zType>TEXT_MAP_OPTION_CALDERA_RANDOM</zType><en-US>Random</en-US></Entry>
+  <Entry><zType>TEXT_MAP_OPTION_CALDERA_MARSH</zType><en-US>Marsh</en-US></Entry>
+  <Entry><zType>TEXT_MAP_OPTION_CALDERA_DESERT</zType><en-US>Desert</en-US></Entry>
+</Root>

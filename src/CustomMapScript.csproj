@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>net472</TargetFramework>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <OutputPath>bin/</OutputPath>
+    <AssemblyName>CustomMapScript</AssemblyName>
+    <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('OSX'))">
+    <GameManagedPath>$(GameDir)/OldWorld.app/Contents/Resources/Data/Managed</GameManagedPath>
+  </PropertyGroup>
+  <PropertyGroup Condition="!$([MSBuild]::IsOSPlatform('OSX'))">
+    <GameManagedPath>$(GameDir)/OldWorld_Data/Managed</GameManagedPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="TenCrowns.GameCore">
+      <HintPath>$(GameManagedPath)/TenCrowns.GameCore.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Mohawk.SystemCore">
+      <HintPath>$(GameManagedPath)/Mohawk.SystemCore.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(GameManagedPath)/UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+</Project>

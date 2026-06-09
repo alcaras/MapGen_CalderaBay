@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<ModInfo>
+  <displayName>Caldera Bay</displayName>
+  <description>A drowned-estuary mirror-duel map: a northern range with a central river gorge, two bay-flanking spurs that pinch the middle, a volcanic island prize, and a contested mountain city. Rivers drain to the central bay.</description>
+  <author>alcaras</author>
+  <modplatform>Local</modplatform>
+  <modversion>1.0</modversion>
+  <tags>MapScript</tags>
+</ModInfo>

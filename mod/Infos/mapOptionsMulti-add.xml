@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<!-- The marsh / desert / random selector for the estuary floodplain moat.
+     owmapgen flag: map-option MAP_OPTIONS_MULTI_CALDERA_MOAT=MAP_OPTION_CALDERA_DESERT -->
+<Root>
+  <Entry>
+    <zType>MAP_OPTIONS_MULTI_CALDERA_MOAT</zType>
+    <Name>TEXT_MAP_OPTIONS_MULTI_CALDERA_MOAT</Name>
+    <Choices>
+      <zValue>MAP_OPTION_CALDERA_RANDOM</zValue>
+      <zValue>MAP_OPTION_CALDERA_MARSH</zValue>
+      <zValue>MAP_OPTION_CALDERA_DESERT</zValue>
+    </Choices>
+    <Default>MAP_OPTION_CALDERA_RANDOM</Default>
+    <bSinglePlayerValid>1</bSinglePlayerValid>
+    <bMultiPlayerValid>1</bMultiPlayerValid>
+  </Entry>
+</Root>

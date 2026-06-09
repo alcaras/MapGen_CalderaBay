@@ -1,0 +1,5 @@
+bin/
+obj/
+_bayout/
+__pycache__/
+*.pyc
