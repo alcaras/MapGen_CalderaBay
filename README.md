@@ -3,7 +3,7 @@
 A custom **Old World** map script: **Caldera Bay** — a competitive, mirror-symmetric
 duel map built around a drowned river estuary.
 
-![Caldera Bay gens](atlas/maps/Caldera_Bay_smallest_1.png)
+![Caldera Bay gens](atlas/maps/Caldera_Bay_smallest_Temperate-1.png)
 
 > **[Browse twelve generations in the live atlas →](https://alcaras.github.io/MapGen_CalderaBay/atlas/)**
 

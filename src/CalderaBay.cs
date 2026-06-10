@@ -211,7 +211,7 @@ namespace OwMapCreation
             // BETWEEN the mirrored spurs.
             int nSpurs = 1;
             double[] spurOff = new double[nSpurs];
-            spurOff[0] = 0.20 + 0.06 * (random.Next(100) / 100.0);   // 0.20–0.26 of W from centre
+            spurOff[0] = 0.35 + 0.05 * (random.Next(100) / 100.0);   // 0.35–0.40 of W from centre
             mSpurOffFrac = spurOff[0];
 
             // WOBBLED COASTLINE: the locked sea band's depth varies per column (a
@@ -427,6 +427,7 @@ namespace OwMapCreation
             MirrorGameplay();      // enforce exact L–R symmetry of the gameplay layer
             RepairLakes();         // again: the mirror can copy a river-fed west lake
                                    // onto an east tile with no river (riverless pond)
+            SealPockets();         // and it can wall in slivers on the east half
             SetIslandCaldera();    // the ONE volcano — after the mirror (a self-mirror tile)
             FinalizeSites();       // authoritative 14–18 sites at distance 8
             AssignTribes();        // tribes live ON final city sites (else: barbs in-game)
@@ -450,7 +451,6 @@ namespace OwMapCreation
             if (siteId < 0) return;
             int W = MapWidth, H = MapHeight;
             int sx = siteId % W, sy = siteId / W;
-            ResourceType noRes = GetTile(mIslandX, mIslandY).Resource;   // the volcano: never has one
             VegetationType noVeg = GetTile(0, 0).Vegetation;             // open sea: never has any
 
             int have = 0;
@@ -460,7 +460,7 @@ namespace OwMapCreation
                 {
                     if (TileDist(x, y, sx, sy) > radius) continue;
                     TileData t = GetTile(x, y);
-                    if (!t.Resource.Equals(noRes)) { have++; continue; }
+                    if ((int)t.Resource >= 0) { have++; continue; }      // has a resource
                     if (x > W / 2) continue;                 // canonical side; the mirror doubles
                     if (t.Terrain.Equals(URBAN_TERRAIN)) continue;
                     if (!t.CitySite.Equals(GetTile(0, 0).CitySite)) continue;
@@ -470,10 +470,24 @@ namespace OwMapCreation
             for (int i = cands.Count - 1; i > 0; i--)
             { int j = random.Next(i + 1); var tmp = cands[i]; cands[i] = cands[j]; cands[j] = tmp; }
 
+            for (int pass = 0; pass < 2; pass++)
             foreach (var c in cands)
             {
                 if (have >= want) break;
                 TileData t = GetTile(c[0], c[1]);
+                if ((int)t.Resource >= 0) continue;
+                // pass 1 (fallback): cold/waste highlands support NO resources at
+                // all (tundra) — warm a couple of tiles near the prize into a
+                // sheltered temperate pocket so the prize isn't barren.
+                if (pass == 1 && !t.Terrain.Equals(WATER_TERRAIN)
+                    && ValidResourceFor(t) == null
+                    && (t.Height.Equals(FLAT_HEIGHT) || t.Height.Equals(HILL_HEIGHT))
+                    && TileDist(c[0], c[1], sx, sy) <= 2)
+                {
+                    t.Terrain = TEMPERATE_TERRAIN;
+                    int mw = (c[1] % 2 == 0) ? (W - 1 - c[0]) : (W - c[0]);
+                    if (mw > W / 2 && mw < W) GetTile(mw, c[1]).Terrain = TEMPERATE_TERRAIN;
+                }
                 string pick = ValidResourceFor(t);
                 if (pick == null) continue;
                 t.Resource = R(pick);
@@ -715,6 +729,7 @@ namespace OwMapCreation
             if (x < 3 || x >= MapWidth - 3 || y < 2 || y >= MapHeight - 2) return false;
             int d = mSeaSouth ? y : (MapHeight - 1 - y);     // rows from the sea edge
             if (d >= MapHeight - 8) return false;            // never wedged against the range
+            if (mReach != null && mReach[y * MapWidth + x] != mMainComp) return false;  // land-reachable from the caps
             TileData t = GetTile(x, y);
             if (!t.CitySite.Equals(none)) return false;
             if (t.Terrain.Equals(WATER_TERRAIN)) return false;
@@ -774,11 +789,51 @@ namespace OwMapCreation
             return n;
         }
 
+        // Land-reachability map: every site except the island must live in ONE
+        // walkable component (the mainland, where the capitals are). Computed on
+        // the FINAL terrain at FinalizeSites time and enforced via Foundable.
+        private int[] mReach; private int mMainComp = -1;
+        private void BuildReachability()
+        {
+            int W = MapWidth, H = MapHeight, n = W * H;
+            mReach = new int[n];
+            for (int i = 0; i < n; i++) mReach[i] = -1;
+            int best = -1, bestSize = 0, id = 0;
+            for (int i = 0; i < n; i++)
+            {
+                if (mReach[i] >= 0) continue;
+                TileData t0 = GetTile(i);
+                if (t0.Terrain.Equals(WATER_TERRAIN) || t0.Height.Equals(MOUNTAIN_HEIGHT)
+                    || t0.Height.Equals(VOLCANO_HEIGHT)) continue;
+                int size = 0;
+                var st = new Stack<int>(); st.Push(i);
+                while (st.Count > 0)
+                {
+                    int j = st.Pop();
+                    if (j < 0 || j >= n || mReach[j] >= 0) continue;
+                    TileData t = GetTile(j);
+                    if (t.Terrain.Equals(WATER_TERRAIN) || t.Height.Equals(MOUNTAIN_HEIGHT)
+                        || t.Height.Equals(VOLCANO_HEIGHT)) continue;
+                    mReach[j] = id; size++;
+                    int x = j % W, y = j / W; int[] dx, dy; Neigh(y, out dx, out dy);
+                    for (int k = 0; k < 6; k++)
+                    {
+                        int nx = x + dx[k], ny = y + dy[k];
+                        if (nx >= 0 && nx < W && ny >= 0 && ny < H) st.Push(ny * W + nx);
+                    }
+                }
+                if (size > bestSize) { bestSize = size; best = id; }
+                id++;
+            }
+            mMainComp = best;
+        }
+
         private void FinalizeSites()
         {
             int W = MapWidth, H = MapHeight, c = W / 2;
             CitySiteType none = GetTile(0, 0).CitySite, sample = FirstSiteType(none);
             if (sample.Equals(none)) return;
+            BuildReachability();   // terrain is final here — sites must be on the mainland
             // wipe centre+east sites EXCEPT the two prizes — the engine already
             // rolled rich resources around those exact tiles, so they must stay.
             for (int y = 0; y < H; y++)
@@ -816,7 +871,8 @@ namespace OwMapCreation
                     if (GetTile(x, y).CitySite.Equals(none)) continue;
                     int dSea = mSeaSouth ? y : (H - 1 - y);
                     if (x < 3 || x > W / 2 - 3 || y < 2 || y >= H - 2 || OnIsland(x, y)
-                        || dSea >= H - 8)                    // engine sites on the range shelf
+                        || dSea >= H - 8                     // engine sites on the range shelf
+                        || (mReach != null && mReach[y * W + x] != mMainComp))   // or cut off by land
                     { GetTile(x, y).CitySite = none; continue; }
                     sites.Add(new[] { x, y });
                 }
