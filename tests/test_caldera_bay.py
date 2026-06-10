@@ -108,7 +108,7 @@ class CalderaBayMap(unittest.TestCase):
         side, _ = self.sea_side()
         worst = 99
         for x in range(self.w):
-            if abs(x - (self.w - 1) / 2) <= 8:
+            if abs(x - (self.w - 1) / 2) <= 9:
                 continue                       # the half-island's columns
             d = 0
             ys = range(self.h) if side == "south" else range(self.h - 1, -1, -1)
@@ -176,7 +176,7 @@ class CalderaBayMap(unittest.TestCase):
                         continue
                     seen.add((cx, cy)); comp.append((cx, cy))
                     stack.extend(neighbors(cx, cy))
-                if 16 <= len(comp) <= 75 and any(
+                if 16 <= len(comp) <= 85 and any(
                         self.tile(a, b).find("CitySite") is not None for a, b in comp):
                     found = True
         self.assertTrue(found, "the bay island should be small, isolated, and hold a site")
@@ -390,7 +390,7 @@ class CalderaBaySweep(unittest.TestCase):
                    else sum(1 for x in range(w) if wat(x, 0)))
             depth = 99
             for x in range(w):
-                if abs(x - (w - 1) / 2) <= 8:
+                if abs(x - (w - 1) / 2) <= 9:
                     continue                  # the half-island's columns
                 dcol = 0
                 for y in (range(h) if south else range(h - 1, -1, -1)):
@@ -402,13 +402,13 @@ class CalderaBaySweep(unittest.TestCase):
             if not 14 <= sites <= 18:
                 problems.append(f"{name}: {sites} sites")
             # no SECOND mountain wall in the piedmont band below the range
-            # (the wobbled range's own lobes reach down to d=h-6), and no
+            # (the wobbled range's own lobes reach down to d=h-7), and no
             # city sites wedged on a shelf against the range
             for y in range(h):
                 d = y if south else h - 1 - y
                 row_mtn = sum(1 for x in range(w)
                               if _t(tiles[y * w + x], "Height") == "HEIGHT_MOUNTAIN")
-                if h - 13 <= d < h - 6 and row_mtn > w * 0.3:
+                if h - 13 <= d < h - 7 and row_mtn > w * 0.3:
                     problems.append(f"{name}: second wall ({row_mtn} mtns at d={d})")
                 if d >= h - 8:
                     row_sites = sum(1 for x in range(w)
@@ -424,7 +424,7 @@ class CalderaBaySweep(unittest.TestCase):
             # coastline must meander (wobbled band) — several distinct depths
             depths = set()
             for x in range(w):
-                if abs(x - (w - 1) / 2) <= 8:
+                if abs(x - (w - 1) / 2) <= 9:
                     continue                  # the half-island's columns
                 dcol = 0
                 for y in (range(h) if south else range(h - 1, -1, -1)):
@@ -457,6 +457,11 @@ class CalderaBaySweep(unittest.TestCase):
                                and hexdist((i % w, i // w), isite) <= 3)
                     if near < 3:
                         problems.append(f"{name}: island prize has {near} resources")
+                # the island SITE must clear the map edge (room for its ring)
+                if isite:
+                    d_site = isite[1] if south else h - 1 - isite[1]
+                    if d_site < 2:
+                        problems.append(f"{name}: island site {isite} hugs the map edge")
                 # the island must touch the sea edge (a half-island volcano)
                 # and sit behind a deep moat: >=6 land-to-land from the
                 # mainland, so >=3 ocean (non-coast) tiles separate the two

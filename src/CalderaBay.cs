@@ -81,9 +81,12 @@ namespace OwMapCreation
             // ensure a pairable foot duo
             for (int i = 0; i < foot.Length && footCount < 2; i++)
                 if (!has(foot[i])) { add(foot[i]); footCount++; }
-            // top up to 4 named tribes total
+            // top up to 5 named tribes total: the game honours ~2 settlements
+            // per tribe-in-use, so 5 tribes buy a 10-settlement budget — room
+            // for the central tribe's 4 plus 2-3 sites per side tribe even on
+            // an 18-site map (we still only PLACE 3 named tribes on the board)
             int guard = 0;
-            while (tribesToUse.Count < 4 && guard++ < 8)
+            while (tribesToUse.Count < 5 && guard++ < 10)
             {
                 string pick = (random.Next(3) == 0 && (!has(horse[0]) || !has(horse[1])))
                     ? (has(horse[0]) ? horse[1] : horse[0])
@@ -242,25 +245,27 @@ namespace OwMapCreation
             }
 
             // WOBBLED RANGE: the locked mountain wall's depth also varies per
-            // column (2–6 rows, the same mirror-symmetric walk), so the range
+            // column (3–7 rows, the same mirror-symmetric walk), so the range
             // bulges into lobes and pulls back into foothill valleys instead
-            // of a ruler line. The engine grows organic hills/peaks in the
-            // dips (the buffer band leaves height free there).
+            // of a ruler line. Deep enough that the siteless shelf in front of
+            // it (sites stop at d=H-9) reads as mountains, not blank plain;
+            // the engine grows organic hills/peaks in the dips.
             int[] rangeHalf = new int[half + 1];
             double rwob = 0;
             for (int k = 0; k <= half; k++)
             {
                 rwob += (random.Next(3) - 1) * 0.9;
                 rwob = Math.Max(-1.5, Math.Min(3.5, rwob));
-                rangeHalf[k] = Math.Max(2, Math.Min(6, 3 + (int)Math.Round(rwob)));
+                rangeHalf[k] = Math.Max(3, Math.Min(7, 4 + (int)Math.Round(rwob)));
             }
 
             // VOLCANIC HALF-ISLAND pressed against the sea edge: the cone juts
             // out of the ocean at the map border (clipped by it — not a complete
             // island), still sea-locked from the mainland by a guaranteed
             // water ring on its inland side.
-            mIslandR = 2.7 + random.Next(4) / 10.0;          // 2.7–3.0 (×2.5 across)
-            int islandD = 2;                                 // centre 2 rows off the edge
+            mIslandR = 3.1 + random.Next(2) / 10.0;          // 3.1–3.2 (×2.5 across; ≥3.1 keeps
+                                                             // the mirrored edge row on land)
+            int islandD = 3;                                 // taller: the site row clears the edge
 
             // WANDERING spur seed-lines: per-row drift so the locked seeds aren't
             // dead-straight walls (the engine grows ridges around them). Drift is
@@ -347,7 +352,7 @@ namespace OwMapCreation
             mIslandX = W / 2;
             mIslandY = mSeaSouth ? islandD : (H - 1 - islandD);
             int reachY = (int)Math.Ceiling(mIslandR) + 8;
-            int reachX = (int)Math.Ceiling(1.5 * (mIslandR + 6.0)) + 1;
+            int reachX = (int)Math.Ceiling(1.5 * (mIslandR + 6.5)) + 1;
             for (int dy = -reachY; dy <= reachY; dy++)
                 for (int dx = -reachX; dx <= reachX; dx++)
                 {
@@ -365,7 +370,7 @@ namespace OwMapCreation
                         LockLand(t, FLAT_HEIGHT, LUSH_TERRAIN);        // fertile apron
                     else if (e <= mIslandR + 1.5)
                         LockWater(t);                                  // the island's own coast ring
-                    else if (eOut <= mIslandR + 6.0)
+                    else if (eOut <= mIslandR + 6.5)
                         LockOcean(t);                                  // the deep moat (no tile-buy)
                 }
         }
@@ -431,16 +436,23 @@ namespace OwMapCreation
             int W = MapWidth, H = MapHeight, cx = W / 2;
             CitySiteType none = GetTile(0, 0).CitySite, sample = FirstSiteType(none);
             if (sample.Equals(none)) return;
+            // the site must CLEAR the map edge (its city ring needs room) —
+            // never adopt or place within 2 rows of the sea border
+            System.Func<int, bool> clears = (yy) =>
+            {
+                int dEdge = mSeaSouth ? yy : (H - 1 - yy);
+                return dEdge >= 2;
+            };
             for (int yy = 0; yy < H; yy++)
                 for (int xx = 0; xx < W; xx++)
-                    if (OnIsland(xx, yy) && !GetTile(xx, yy).CitySite.Equals(none))
+                    if (clears(yy) && OnIsland(xx, yy) && !GetTile(xx, yy).CitySite.Equals(none))
                     { mIslandSiteId = yy * W + xx; return; }            // already there
             // a self-mirror island tile (odd row, x=cx) that's foundable land…
             for (int rad = 0; rad < 6; rad++)
                 for (int s = -1; s <= 1; s += 2)
                 {
                     int y = mIslandY + rad * s;
-                    if (y < 0 || y >= H || (y % 2) == 0) continue;
+                    if (y < 0 || y >= H || (y % 2) == 0 || !clears(y)) continue;
                     if (!OnIsland(cx, y)) continue;
                     TileData t = GetTile(cx, y);
                     if (t.Terrain.Equals(WATER_TERRAIN) || t.Height.Equals(VOLCANO_HEIGHT) || t.Height.Equals(MOUNTAIN_HEIGHT)) continue;
@@ -452,7 +464,7 @@ namespace OwMapCreation
                 for (int s = -1; s <= 1; s += 2)
                 {
                     int y = mIslandY + rad * s;
-                    if (y < 0 || y >= H || (y % 2) == 0 || !OnIsland(cx, y)) continue;
+                    if (y < 0 || y >= H || (y % 2) == 0 || !clears(y) || !OnIsland(cx, y)) continue;
                     TileData t = GetTile(cx, y);
                     t.Terrain = LUSH_TERRAIN; t.Height = FLAT_HEIGHT; t.CitySite = sample;
                     mIslandSiteId = t.ID; return;
@@ -827,6 +839,29 @@ namespace OwMapCreation
             if (t.Height.Equals(MOUNTAIN_HEIGHT) || t.Height.Equals(VOLCANO_HEIGHT) || t.Height.Equals(LAKE_HEIGHT)) return false;
             return true;
         }
+        // Engine-native placement steering (the built-in Dota script's
+        // pattern): declare invalid spots UP FRONT so the engine's AddCities
+        // scatters sites naturally where they can STAY, instead of placing
+        // them and our late passes wiping them. The prizes are still seated
+        // deliberately (Ensure*CitySite bypasses these hooks).
+        protected override bool IsValidCitySite(TileData pCitySite, bool bCheckAdjacent = true)
+        {
+            int x = TileX(pCitySite), y = TileY(pCitySite);
+            if (OnIsland(x, y)) return false;            // the island prize is placed deliberately
+            if (InsideSpurFrame(x, y)) return false;     // the corridor holds only the prizes
+            int d = mSeaSouth ? y : (MapHeight - 1 - y);
+            if (d >= MapHeight - 8) return false;        // never wedged on the range shelf
+            return base.IsValidCitySite(pCitySite, bCheckAdjacent);
+        }
+        protected override bool IsValidPlayerStart(TileData tile, PlayerType player, int minTeamStartDistance)
+        {
+            int x = TileX(tile), y = TileY(tile);
+            if (OnIsland(x, y) || InsideSpurFrame(x, y)) return false;
+            // start ON an existing city site — otherwise start placement
+            // invents an extra site, inflating the free-site count per side
+            if (tile.CitySite.Equals(GetTile(0, 0).CitySite)) return false;
+            return base.IsValidPlayerStart(tile, player, minTeamStartDistance);
+        }
         // the corridor between the mirrored spurs is reserved for the TWO
         // prizes (island + highland) — every other site stays on the player
         // side of its spur.
@@ -1182,9 +1217,10 @@ namespace OwMapCreation
             int named = 2;                                       // highland + island
             for (int i = 0; i < wsites.Count; i++)
                 if (kind[i] == 2 || kind[i] == 3) named += 2;    // site + its mirror
-            // shed to FREE (not barb) so the mirrored 2-barb-per-side layout
-            // holds whatever the site count — extras become neutral expansion
-            int budget = 2 * (tribesToUse != null ? tribesToUse.Count : 4);
+            // 5 tribes-in-use buy a 10-settlement budget, which covers even an
+            // 18-site map (2 prizes + 2 forward + 3 side sites per side). The
+            // guard below is a never-expected safety valve.
+            int budget = 2 * (tribesToUse != null ? tribesToUse.Count : 5);
             for (int i = wsites.Count - 1; i >= 0 && named > budget; i--)
                 if (kind[i] == 2) { role[i] = null; kind[i] = 0; named -= 2; }
 
