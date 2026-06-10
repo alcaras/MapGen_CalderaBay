@@ -4,260 +4,706 @@ using TenCrowns.GameCore;
 
 namespace OwMapCreation
 {
-    // CALDERA BAY — a geomorphologically-motivated mirror duel.
-    //
-    // The story (which fixes every feature): a coastal mountain range walls
-    // off the north and sheds water south across a plain into the sea. The
-    // trunk river's drowned lower course is the central BAY (a ria/estuary);
-    // it exits the range through a water-gap. Foothill SPURS finger south from
-    // the range, splitting each half into lanes; the valleys + the open plain
-    // are the passes. The estuary's fertile floodplain is ringed by deltaic
-    // MARSH (or, some seasons, a sun-baked arid basin) — slow to cross. And in
-    // the bay sits a small VOLCANIC ISLAND, its slopes fed by radial streams:
-    // a rich neutral prize reachable only by sea. Two realms face off across
-    // the water, mountains at their backs.
-    //
-    // Implementation: a continuous, mirror-symmetric height field e(x,y)
-    // classified into ocean/coast/flat/hill/mountain, with the island and the
-    // marsh/desert moat stamped over it. We keep the engine's elevation+river
-    // passes so real rivers flow downhill on our slope into the bay; rivers
-    // live in separate fields, so our terrain re-stamp doesn't erase them.
-    public class MapScriptCalderaBay : DefaultMapScript
+    // CALDERA BAY — a mirror duel built on the engine's COASTAL RAIN BASIN
+    // generator. Instead of stamping a custom height field (fragile, and it
+    // fought the engine's rivers/lakes), we LOCK the few defining features — a
+    // central drowned bay, the northern mountain range with a river gorge, the
+    // flanking spurs, and a volcanic island seed — and let CoastalRainBasin grow
+    // organic elevation, rivers, lakes and rain-shadow climate around them.
+    public class MapScriptCalderaBay : CoastalRainBasin
     {
-        // --- fixed macro terrain (tile units; sea level is e = 0) -----------
-        // These set the archetype's frame; the per-gen variation (below) jitters
-        // the bay width, spur positions, island, moat, relief etc. around it.
-        const int SEA_ROWS = 8;            // sea depth along the south edge
-        const int COAST_BAND = 2;          // shallow (coast) water rows before deep ocean
-        const double SPUR_REACH = 0.5;     // <1 → gentler taper → spurs reach further south
-        const double NORTH_PLATEAU = 14;   // base slope plateaus here (open highland, not a wall)
-        const int RANGE_ROWS = 3;          // mountain range band along the top
-        const double HILL_E = 10;          // e >= this → hills
-        const double MTN_E = 18;           // e >= this → mountains
-
-        private bool mRolled, mDesertMoat;
-
-        // --- per-generation variation (drawn once from the seeded RNG) -------
-        // Caldera Bay is always the SAME archetype (north range, central bay,
-        // two flanking spurs, a bay island, a moat) but every gen must look
-        // naturally DIFFERENT — like the built-in maps, whose organic shape
-        // comes from seeded octave noise (the engine's NoiseGenerator: AddNoise
-        // octaves → Normalize). We mirror that: jitter the macro parameters and
-        // drive the fine shape with a seeded fractal-Brownian noise. Left-right
-        // symmetry is still exact (MirrorGameplay copies west→east afterwards),
-        // so the asymmetric noise on the east half is simply overwritten.
-        private bool mVaried;
-        private int mSalt;                 // seeds the value-noise lattice
-        private double mBayHalf, mBayWobble, mBayReachFrac;
-        private double mNoiseAmp, mNoiseFreq, mGorgeHalf, mMoatHalf, mMoatE;
-        private double mIslandR, mIslandMoat, mRangeRough;
-        private int mIslandY;
-        // a VARIABLE set of mountain spurs (count + per-spur offset/height/width)
-        private int mNumSpurs;
-        private double[] mSpurOff, mSpurH, mSpurOutW, mSpurInW;
-
-        // Draw the gen's variation once and cache it, so the GenerateLand stamp
-        // and every later re-stamp (SetUnreachableAreas) use identical terrain.
-        // Ranges are deliberately wide — the archetype (north range, south sea,
-        // central bay, island, moat) is structural, but everything else swings a
-        // lot so no two gens read alike.
-        private void EnsureVariation()
-        {
-            if (mVaried) return;
-            mVaried = true;
-            mSalt       = random.Next(1 << 30);
-            mBayHalf    = RD(0.10, 0.20);   // estuary mouth half-width
-            mBayReachFrac = RD(0.50, 0.72); // how far up the map the bay cuts (½–⅔)
-            mBayWobble  = RD(0.0, 0.55);    // how much the channel width breathes with latitude
-            mNoiseAmp   = RD(3.8, 6.5);     // organic relief (rough coastline & hills)
-            mNoiseFreq  = RD(0.07, 0.16);   // organic feature scale
-            mGorgeHalf  = RD(0.07, 0.15);   // width of the breach in the range
-            mMoatHalf   = RD(0.14, 0.26);   // floodplain band width
-            mMoatE      = RD(2.5, 5.5);     // floodplain depth cut-off
-            mIslandR    = RD(2.8, 4.2);     // island size
-            mIslandMoat = RD(1.2, 2.0);     // island's water ring
-            mIslandY    = 5 + random.Next(6); // island row, 5..10 (in the bay)
-            mRangeRough = RD(0.0, 4.0);     // how jaggedly the range edge dips south
-
-            // 2–4 spurs at random offsets from centre (never in the central
-            // gorge), each its own height and asymmetric width.
-            mNumSpurs = 2 + random.Next(3);
-            mSpurOff = new double[mNumSpurs];
-            mSpurH = new double[mNumSpurs];
-            mSpurOutW = new double[mNumSpurs];
-            mSpurInW = new double[mNumSpurs];
-            for (int i = 0; i < mNumSpurs; i++)
-            {
-                mSpurOff[i]  = RD(0.10, 0.42);  // distance from centre (frac of W)
-                mSpurH[i]    = RD(11.0, 20.0);  // spur height
-                mSpurOutW[i] = RD(2.4, 5.2);    // outer (curved) half-width
-                mSpurInW[i]  = RD(0.9, 1.8);    // inner (sharp) half-width
-            }
-        }
-
-        // A seeded random double in [lo, hi).
-        private double RD(double lo, double hi)
-        {
-            return lo + (hi - lo) * (random.Next(100000) / 100000.0);
-        }
-
-        // ---- seeded value-noise → fractal Brownian motion -------------------
-        // Cheap hash-based value noise (a seeded lattice), summed over octaves
-        // and normalised — the same recipe the engine's NoiseGenerator uses, so
-        // each seed yields a genuinely different organic coastline/relief.
-        private double Hash2(int xi, int yi)
-        {
-            unchecked
-            {
-                int h = xi * 374761393 + yi * 668265263 + mSalt * 1610612741;
-                h = (h ^ (h >> 13)) * 1274126177;
-                h ^= h >> 16;
-                return ((h & 0xFFFF) / 32767.5) - 1.0;   // ~[-1, 1]
-            }
-        }
-
-        private double VNoise(double x, double y)
-        {
-            int x0 = (int)Math.Floor(x), y0 = (int)Math.Floor(y);
-            double fx = x - x0, fy = y - y0;
-            double sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy); // smoothstep
-            double a = Hash2(x0, y0), b = Hash2(x0 + 1, y0);
-            double c = Hash2(x0, y0 + 1), d = Hash2(x0 + 1, y0 + 1);
-            double top = a + (b - a) * sx, bot = c + (d - c) * sx;
-            return top + (bot - top) * sy;
-        }
-
-        private double Fbm(double x, double y)
-        {
-            double sum = 0, amp = 1, fr = 1, norm = 0;
-            for (int o = 0; o < 4; o++)
-            {
-                sum += amp * VNoise(x * fr, y * fr);
-                norm += amp; amp *= 0.5; fr *= 2.0;
-            }
-            return sum / norm;   // [-1, 1]
-        }
-
         public MapScriptCalderaBay(ref MapParameters mapParameters, Infos infos)
             : base(ref mapParameters, infos)
         {
         }
 
-        // Declares the script's custom multi-choice options. The engine calls
-        // this static method by reflection to know which options to surface in
-        // the New Game UI and to load into the script's multiOptions dict.
         public static new void GetCustomOptionsMulti(List<MapOptionsMultiType> options, Infos infos)
         {
-            options.Add(infos.getType<MapOptionsMultiType>("MAP_OPTIONS_MULTI_CALDERA_MOAT"));
+            options.Add(infos.getType<MapOptionsMultiType>("MAP_OPTIONS_MULTI_CALDERA_CLIMATE"));
         }
 
-        protected override void GenerateLand()
+        // A fixed "wide duel" size — chosen so the engine's natural city sites
+        // (at the normal min distance) land at 14–18.
+        protected override void SetMapSize()
         {
-            if (!mRolled) { mDesertMoat = ResolveMoat(); mRolled = true; }
-            ApplyLayout();
+            base.SetMapSize();
+            mapParameters.iWidth = 64;
+            mapParameters.iHeight = 43;     // tall enough for 14–18 sites with the tall sea + lagoon
         }
 
-        // The "Estuary Floodplain" map option: Marsh, Desert, or Random
-        // (a per-game coin-flip). Falls back to Random if the option is unset.
-        private bool ResolveMoat()
+        // ---- Climate (latitude) map option → the basin's latitude band ----
+        private int ResolveClimate()
         {
-            // Read the selection straight from the game parameters. (The base
-            // InitMapData only loads the built-in options into multiOptions, not
-            // custom ones, so TryGetMultiOption wouldn't see it.)
-            var opt = infos.getType<MapOptionsMultiType>("MAP_OPTIONS_MULTI_CALDERA_MOAT");
+            var opt = infos.getType<MapOptionsMultiType>("MAP_OPTIONS_MULTI_CALDERA_CLIMATE");
             MapOptionType choice;
             if ((int)opt >= 0 &&
                 mapParameters.gameParams.mapMapMultiOptions.TryGetValue(opt, out choice))
             {
                 int c = (int)choice;
-                if (c == (int)infos.getType<MapOptionType>("MAP_OPTION_CALDERA_MARSH")) return false;
-                if (c == (int)infos.getType<MapOptionType>("MAP_OPTION_CALDERA_DESERT")) return true;
+                if (c == (int)infos.getType<MapOptionType>("MAP_OPTION_CALDERA_MEDITERRANEAN")) return 0;
+                if (c == (int)infos.getType<MapOptionType>("MAP_OPTION_CALDERA_TEMPERATE")) return 1;
+                if (c == (int)infos.getType<MapOptionType>("MAP_OPTION_CALDERA_NORTHERN")) return 2;
             }
-            return random.Next(2) == 0;
+            return -1;
+        }
+        private short ClimateLat(short med, short temp, short north, short rand)
+        {
+            switch (ResolveClimate()) { case 0: return med; case 1: return temp; case 2: return north; default: return rand; }
+        }
+        public override short MinLatitude { get { return ClimateLat(18, 35, 55, base.MinLatitude); } }
+        public override short MaxLatitude { get { return ClimateLat(38, 52, 70, base.MaxLatitude); } }
+        // keep lakes to a few (the basin default over-fills our locked terrain)
+        protected override short LakePercent { get { return 3; } }
+
+        // ---- the defining shape: lock it, then let the engine grow the rest ----
+        protected override void GenerateLand()
+        {
+            LockCaldera();
+            base.GenerateLand();
         }
 
-        // Place land/mountains and climate ourselves, but KEEP the engine's
-        // elevation + river passes (rivers flow downhill into the bay) and its
-        // BuildVegetation (natural forests/scrub on our terrain, like the
-        // built-in maps). We no-op only the passes that would fight our design.
-        protected override void GenerateDeserts() { }
-        protected override void GenerateMountains() { }
-        protected override void ModifyTerrain() { }
-        protected override void SmoothTerrain() { }
+        // Lock a tile's height AND terrain (and set them) so the engine's land
+        // generation can't re-flood or re-shape our framed features.
+        private void LockWater(TileData t)
+        {
+            // Lock TERRAIN only (guaranteed water — the engine can't land it) but
+            // leave HEIGHT free, so the engine's own coast pass assigns shallow
+            // COAST along every shoreline (organic transitions, coastal shipping,
+            // and valid tiles for sea resources like pearls around the island).
+            LockTileTerrain(t, WATER_TERRAIN, true);
+            t.Terrain = WATER_TERRAIN;
+            t.Height = OCEAN_HEIGHT;
+        }
+        private void LockLand(TileData t, HeightType h, TerrainType terr)
+        {
+            LockTileHeight(t, h, true);
+            LockTileTerrain(t, terr, true);
+            t.Terrain = terr;
+            // remember which mountains are OURS (the engine height-locks its own
+            // chains too, so IsHeightLocked can't tell them apart later)
+            if (h.Equals(MOUNTAIN_HEIGHT) && mOurMountain != null) mOurMountain[t.ID] = true;
+        }
+        private bool[] mOurMountain;
 
-        // Let the engine place its sites, then GUARANTEE one on the volcanic
-        // island — it's a central prize and must always be foundable, but the
-        // engine sometimes skips it because the island is sea-locked. Done here
-        // (in AddCities) so the engine's later passes (resources, closest-city,
-        // mirror) treat it like any other site.
+        private void LockCaldera()
+        {
+            int W = MapWidth, H = MapHeight;
+            double cx = (W - 1) / 2.0;
+            mOurMountain = new bool[W * H];
+
+            // The SEA is on one edge (south or north, per gen); the mountains on
+            // the opposite edge; the bay drains from the sea edge inland toward the
+            // range. `d` = rows from the sea edge, so the same logic works flipped.
+            mSeaSouth = random.Next(2) == 0;
+            int seaBand = 6 + random.Next(3);                // base sea depth, 6–8 (always ≥5)
+            int nSpurs = 1 + random.Next(2);                 // 1–2 spurs per side
+            double[] spurOff = new double[nSpurs];
+            for (int i = 0; i < nSpurs; i++) spurOff[i] = 0.16 + 0.22 * (random.Next(100) / 100.0);
+
+            // WOBBLED COASTLINE: the locked sea band's depth varies per column (a
+            // smooth, mirror-symmetric random walk from the centre outward), so the
+            // shore meanders with coves and headlands instead of a ruler line.
+            int half = W / 2 + 2;
+            int[] depthHalf = new int[half + 1];
+            double wob = 0;
+            for (int k = 0; k <= half; k++)
+            {
+                wob += (random.Next(3) - 1) * 0.8;
+                wob = Math.Max(-1.5, Math.Min(2.5, wob));
+                depthHalf[k] = Math.Max(6, seaBand + (int)Math.Round(wob));
+            }
+
+            // BIG VOLCANIC ISLAND in a lagoon basin: radius ~2.6–3.4 (≈25–35 land
+            // tiles), sitting in a widened bay-mouth basin that guarantees a ≥2-tile
+            // water ring around it (so it is always sea-locked).
+            mIslandR = 2.6 + random.Next(9) / 10.0;          // 2.6–3.4
+            int islandD = seaBand + (int)Math.Ceiling(mIslandR) + 2;
+
+            // WANDERING spur seed-lines: per-row drift so the locked seeds aren't
+            // dead-straight walls (the engine grows ridges around them). Drift is
+            // per ROW, applied to |xs| — so it stays mirror-symmetric.
+            double[][] spurAt = new double[nSpurs][];
+            for (int i = 0; i < nSpurs; i++)
+            {
+                spurAt[i] = new double[H];
+                double drift = 0;
+                for (int y = 0; y < H; y++)
+                {
+                    drift += (random.Next(3) - 1) * 0.5;             // wander ±½ tile per row
+                    drift = Math.Max(-2.5, Math.Min(2.5, drift));    // stay near the axis
+                    spurAt[i][y] = W * spurOff[i] + drift;
+                }
+            }
+
+            for (int x = 0; x < W; x++)
+            {
+                double xs = Math.Abs(x - cx);
+                for (int y = 0; y < H; y++)
+                {
+                    TileData t = GetTile(x, y);
+                    int d = mSeaSouth ? y : (H - 1 - y);      // rows from the sea edge
+                    double inf = d / (double)(H - 1);          // 0 sea edge → 1 mountain edge
+
+                    // GUARANTEED SEA band on the sea edge, ≥6 deep everywhere (a
+                    // ship line can't wall it off) and WOBBLED per column so the
+                    // coastline meanders.
+                    int k = (int)Math.Round(Math.Abs(x - cx));
+                    if (d < depthHalf[Math.Min(k, half)]) { LockWater(t); continue; }
+
+                    // central BAY — a drowned channel cutting ~55% inland from the
+                    // sea, narrowing, draining into the sea band.
+                    double bayHalf = W * 0.085 * (1.0 - 0.7 * Math.Min(1.0, inf / 0.55));
+                    if (inf < 0.55 && xs < bayHalf) { LockWater(t); continue; }
+
+                    // the far (mountain) EDGE: the RANGE proper (mountains, with the
+                    // central GORGE pass), plus a TERRAIN-ONLY locked buffer in
+                    // front of it. The buffer guarantees land (no second sea behind
+                    // the range) but leaves HEIGHT free — locking it flat used to
+                    // force the engine's elevation into a trough along the lock
+                    // boundary, which FillLakes then lined with a lake chain.
+                    if (d >= H - 3)
+                    {
+                        if (xs > W * 0.11) LockLand(t, MOUNTAIN_HEIGHT, TEMPERATE_TERRAIN);
+                        else LockLand(t, FLAT_HEIGHT, TEMPERATE_TERRAIN);   // the gorge pass
+                        continue;
+                    }
+                    if (d >= H - 7)
+                    {
+                        LockTileTerrain(t, TEMPERATE_TERRAIN, true);        // land, but natural height
+                        t.Terrain = TEMPERATE_TERRAIN;
+                        continue;
+                    }
+
+                    // flanking SPURS — wandering but CONTINUOUS mountain seed-lines:
+                    // a spur is a hard barrier (the lanes go AROUND its tip, never
+                    // through it). The wander keeps it organic; lake repair handles
+                    // any river pooling at the wall.
+                    for (int i = 0; i < nSpurs; i++)
+                        if (Math.Abs(xs - spurAt[i][y]) < 0.9 && inf > 0.42)
+                        { LockLand(t, MOUNTAIN_HEIGHT, TEMPERATE_TERRAIN); break; }
+                }
+            }
+
+            // VOLCANIC ISLAND in its lagoon BASIN — a real island (≈25–35 tiles):
+            // lush flats with a hill ring near the centre (slopes for the caldera
+            // and its gold), ringed by ≥2 tiles of locked water so it is always
+            // its own landmass. The basin also widens the lower bay naturally.
+            mIslandX = W / 2;
+            mIslandY = mSeaSouth ? islandD : (H - 1 - islandD);
+            int reach = (int)Math.Ceiling(mIslandR) + 2;
+            for (int dy = -reach; dy <= reach; dy++)
+                for (int dx = -reach; dx <= reach; dx++)
+                {
+                    int x = mIslandX + dx, y = mIslandY + dy;
+                    if (x < 0 || x >= W || y < 0 || y >= H) continue;
+                    double dist = Math.Sqrt(dx * dx + dy * dy);
+                    TileData t = GetTile(x, y);
+                    if (dist <= 1.4)
+                        LockLand(t, HILL_HEIGHT, TEMPERATE_TERRAIN);   // volcanic slopes (gold-valid)
+                    else if (dist <= mIslandR)
+                        LockLand(t, FLAT_HEIGHT, LUSH_TERRAIN);        // fertile apron
+                    else if (dist <= mIslandR + 2.0)
+                        LockWater(t);                                  // the guaranteed ring
+                }
+        }
+        private bool mSeaSouth;
+        private int mIslandX, mIslandY;
+        private double mIslandR;
+
+        // ================= gameplay (sites, tribes, prizes) =================
+
+        private TerrainType T(string z) { return infos.getType<TerrainType>(z); }
+        private ResourceType R(string z) { return infos.getType<ResourceType>(z); }
+        private bool OnIsland(int x, int y)
+        {
+            int dx = x - mIslandX, dy = y - mIslandY;
+            double r = mIslandR + 1.5;              // the island + its water ring
+            return dx * dx + dy * dy <= r * r;
+        }
+        private static void Neigh(int y, out int[] dx, out int[] dy)
+        {
+            if ((y & 1) == 1) { dx = new[] { -1, 0, 1, 0, -1, -1 }; dy = new[] { 1, 1, 0, -1, -1, 0 }; }
+            else { dx = new[] { 0, 1, 1, 1, 0, -1 }; dy = new[] { 1, 1, 0, -1, -1, 0 }; }
+        }
+
+        // GUARANTEE both contested prize sites (island + highland) in AddCities —
+        // BEFORE the engine's resource pass — so they're treated as real sites
+        // and can be promoted to RICH in GetCitySiteResourceLevels (the engine
+        // then rolls extra resources around them organically, validity- and
+        // density-respecting — nothing hardcoded).
         protected override bool AddCities()
         {
             bool ok = base.AddCities();
             EnsureIslandCitySite();
+            EnsureCentreCitySite();
             return ok;
+        }
+        private int mIslandSiteId = -1, mCentreSiteId = -1;
+
+        // The organic prize richness: the engine sorts city sites into rich /
+        // moderate / poor (per the player's resource-density option) and rolls
+        // resources accordingly. The two contested centres are always RICH.
+        protected override void GetCitySiteResourceLevels(
+            List<TileData> citySites, List<TileData> richSites,
+            List<TileData> moderateSites, List<TileData> poorSites)
+        {
+            base.GetCitySiteResourceLevels(citySites, richSites, moderateSites, poorSites);
+            foreach (TileData s in citySites)
+            {
+                if (s.ID != mIslandSiteId && s.ID != mCentreSiteId) continue;
+                moderateSites.Remove(s);
+                poorSites.Remove(s);
+                if (!richSites.Contains(s)) richSites.Add(s);
+            }
         }
 
         private void EnsureIslandCitySite()
         {
-            int W = MapWidth, H = MapHeight;
-            CitySiteType none = GetTile(0, 0).CitySite;
-
-            // already a site on/around the island? nothing to do.
-            CitySiteType sample = none;
-            for (int i = 0; i < W * H; i++)
-            {
-                CitySiteType cs = GetTile(i).CitySite;
-                if (cs.Equals(none)) continue;
-                if (sample.Equals(none)) sample = cs;                 // a usable site type
-                int x = i % W, y = i / W;
-                if (OnIsland(x, y)) return;                            // island already has one
-            }
-            if (sample.Equals(none)) return;                          // no sites at all (shouldn't happen)
-
-            // Prefer the dead-centre self-mirror tile (odd row, x=W/2): a single
-            // fair island site that mirrors to itself. Pick the foundable island
-            // tile (flat/hill land, not the volcano) closest to the island centre.
-            int bx = -1, by = -1; double best = 1e9;
-            for (int y = 0; y < H; y++)
-            {
-                if ((y % 2) == 0) continue;                           // self-mirror rows only
-                int x = W / 2;
-                if (!OnIsland(x, y)) continue;
-                TileData t = GetTile(x, y);
-                if (t.Terrain.Equals(WATER_TERRAIN)) continue;
-                if (t.Height.Equals(VOLCANO_HEIGHT) || t.Height.Equals(MOUNTAIN_HEIGHT)) continue;
-                double d = Math.Abs(y - mIslandY);
-                if (d < best) { best = d; bx = x; by = y; }
-            }
-            // fallback: any foundable island tile on the west half (MirrorGameplay
-            // copies it east, giving a symmetric pair).
-            for (int y = 0; y < H && bx < 0; y++)
-                for (int x = 0; x < W / 2 && bx < 0; x++)
+            int W = MapWidth, H = MapHeight, cx = W / 2;
+            CitySiteType none = GetTile(0, 0).CitySite, sample = FirstSiteType(none);
+            if (sample.Equals(none)) return;
+            for (int yy = 0; yy < H; yy++)
+                for (int xx = 0; xx < W; xx++)
+                    if (OnIsland(xx, yy) && !GetTile(xx, yy).CitySite.Equals(none))
+                    { mIslandSiteId = yy * W + xx; return; }            // already there
+            // a self-mirror island tile (odd row, x=cx) that's foundable land…
+            for (int rad = 0; rad < 6; rad++)
+                for (int s = -1; s <= 1; s += 2)
                 {
-                    if (!OnIsland(x, y)) continue;
-                    TileData t = GetTile(x, y);
-                    if (t.Terrain.Equals(WATER_TERRAIN)) continue;
-                    if (t.Height.Equals(VOLCANO_HEIGHT) || t.Height.Equals(MOUNTAIN_HEIGHT)) continue;
-                    bx = x; by = y;
+                    int y = mIslandY + rad * s;
+                    if (y < 0 || y >= H || (y % 2) == 0) continue;
+                    if (!OnIsland(cx, y)) continue;
+                    TileData t = GetTile(cx, y);
+                    if (t.Terrain.Equals(WATER_TERRAIN) || t.Height.Equals(VOLCANO_HEIGHT) || t.Height.Equals(MOUNTAIN_HEIGHT)) continue;
+                    t.CitySite = sample; mIslandSiteId = t.ID; return;
                 }
-            if (bx >= 0) GetTile(bx, by).CitySite = sample;
+            // …else FORCE the nearest central island tile to a foundable flat so
+            // the prize always exists (never a west-half fallback that doubles).
+            for (int rad = 0; rad < 6; rad++)
+                for (int s = -1; s <= 1; s += 2)
+                {
+                    int y = mIslandY + rad * s;
+                    if (y < 0 || y >= H || (y % 2) == 0 || !OnIsland(cx, y)) continue;
+                    TileData t = GetTile(cx, y);
+                    t.Terrain = LUSH_TERRAIN; t.Height = FLAT_HEIGHT; t.CitySite = sample;
+                    mIslandSiteId = t.ID; return;
+                }
         }
 
-        // Tribes: exactly one DIPLOMACY tribe per player — a DIFFERENT one each
-        // side, placed at mirror positions (so the layout is fair but the two
-        // neighbours aren't identical) — plus one tribe alone in the contested
-        // centre. Rules the user asked for:
-        //   * a different tribe per player side;
-        //   * if either side's tribe is a HORSE tribe (Scythians/Numidians),
-        //     BOTH sides get a horse tribe (never a horse vs foot mismatch);
-        //   * both player tribes are diplomacy tribes, so the count of
-        //     barbarian-vs-tribe sites is identical on each half (1 tribe, 0
-        //     barb per side);
-        //   * the centre tribe is HUNS only if the engine actually rolled them
-        //     (they "had a chance to spawn"), else another tribe — and never on
-        //     a player's site (it sits on the dead-centre self-mirror axis).
-        // We keep the engine's tribe setup (SetTribesToUse, etc.) via base, read
-        // back what it rolled, then re-place the sites.
+        // The LAST Build stage (the engine's order is …AddCities → AddResources →
+        // AddMiddleRowCitiesToMirrorMap → PlaceTribes → AddBonusImprovements →
+        // AddMapElementNames) — so every pass here sees the FINAL engine output.
+        // Running this from CalculateClosestCitySites (inside AddCities) was a
+        // bug: AddResources then rolled right over everything we placed.
+        protected override void AddMapElementNames()
+        {
+            RepairLakes();         // no lake chains along the range, no tarns walled in rock
+            TameVolcanoes();       // the engine scatters volcanoes through the ranges
+            FlattenCoast();        // CoastalRainBasin walls the SEA edge with mountains
+            TamePiedmont();        // …and sometimes builds a SECOND wall below our range
+            MirrorGameplay();      // enforce exact L–R symmetry of the gameplay layer
+            RepairLakes();         // again: the mirror can copy a river-fed west lake
+                                   // onto an east tile with no river (riverless pond)
+            SetIslandCaldera();    // the ONE volcano — after the mirror (a self-mirror tile)
+            FinalizeSites();       // authoritative 14–18 sites at distance 8
+            RichenPrizes();        // floor on prize richness if the engine rolled stingy
+            base.AddMapElementNames();   // names go on the FINAL terrain
+        }
+
+        // The rich-site promotion (GetCitySiteResourceLevels) usually delivers,
+        // but the engine's rolls can come up stingy on the island's few tiles.
+        // Guarantee a FLOOR organically: count resources near each prize and, if
+        // short, add RANDOMLY-CHOSEN resources that are VALID for each tile's
+        // terrain/height (no scripted resource list) — mirrored for fairness.
+        private void RichenPrizes()
+        {
+            RichenAround(mIslandSiteId, 4, 3);
+            RichenAround(mCentreSiteId, 4, 4);   // wider: tundra highlands hold nothing
+        }
+        private void RichenAround(int siteId, int want, int radius)
+        {
+            if (siteId < 0) return;
+            int W = MapWidth, H = MapHeight;
+            int sx = siteId % W, sy = siteId / W;
+            ResourceType noRes = GetTile(mIslandX, mIslandY).Resource;   // the volcano: never has one
+            VegetationType noVeg = GetTile(0, 0).Vegetation;             // open sea: never has any
+
+            int have = 0;
+            var cands = new List<int[]>();
+            for (int y = Math.Max(0, sy - radius); y <= Math.Min(H - 1, sy + radius); y++)
+                for (int x = Math.Max(0, sx - radius); x <= Math.Min(W - 1, sx + radius); x++)
+                {
+                    if (TileDist(x, y, sx, sy) > radius) continue;
+                    TileData t = GetTile(x, y);
+                    if (!t.Resource.Equals(noRes)) { have++; continue; }
+                    if (x > W / 2) continue;                 // canonical side; the mirror doubles
+                    if (t.Terrain.Equals(URBAN_TERRAIN)) continue;
+                    if (!t.CitySite.Equals(GetTile(0, 0).CitySite)) continue;
+                    cands.Add(new[] { x, y });
+                }
+            // random order (Fisher–Yates with the seeded RNG)
+            for (int i = cands.Count - 1; i > 0; i--)
+            { int j = random.Next(i + 1); var tmp = cands[i]; cands[i] = cands[j]; cands[j] = tmp; }
+
+            foreach (var c in cands)
+            {
+                if (have >= want) break;
+                TileData t = GetTile(c[0], c[1]);
+                string pick = ValidResourceFor(t);
+                if (pick == null) continue;
+                t.Resource = R(pick);
+                t.Vegetation = noVeg;                        // all picks are veg-free-valid
+                have++;
+                // Mirror with the ENGINE's own pairing (GetMirrorTileOfThisTile),
+                // so the engine's later mirror pass (MirrorPlayerStarts in mirror
+                // games) preserves rather than wipes the pair. It returns -1 for
+                // water — water resources (pearls etc.) aren't mirror-copied by
+                // the engine, so they're safe as placed; pair them ourselves.
+                int mid = GetMirrorTileOfThisTile(t.ID);
+                if (mid >= 0 && mid != t.ID)
+                {
+                    TileData m = GetTile(mid);                // terrain is mirror-identical
+                    m.Resource = R(pick);
+                    m.Vegetation = noVeg;
+                    if (TileDist(mid % W, mid / W, sx, sy) <= radius) have++;
+                }
+                else if (t.Terrain.Equals(WATER_TERRAIN))
+                {
+                    int mxx = (c[1] % 2 == 0) ? (W - 1 - c[0]) : (W - c[0]);
+                    if (mxx > W / 2 && mxx < W && GetTile(mxx, c[1]).Terrain.Equals(WATER_TERRAIN))
+                    {
+                        GetTile(mxx, c[1]).Resource = R(pick);
+                        if (TileDist(mxx, c[1], sx, sy) <= radius) have++;
+                    }
+                }
+            }
+        }
+        // A random resource VALID for this tile, per resource.xml's actual
+        // abTerrainValid/abHeightValid tables (only resources valid WITHOUT
+        // vegetation, since we clear it). Tundra/marsh/sand support none.
+        private string ValidResourceFor(TileData t)
+        {
+            var opts = new List<string>();
+            bool lush = t.Terrain.Equals(LUSH_TERRAIN);
+            bool temp = t.Terrain.Equals(TEMPERATE_TERRAIN);
+            bool arid = (int)t.Terrain == (int)T("TERRAIN_ARID");
+            if (t.Terrain.Equals(WATER_TERRAIN))
+            {
+                if (t.Height.Equals(COAST_HEIGHT))
+                { opts.Add("RESOURCE_FISH"); opts.Add("RESOURCE_CRAB"); opts.Add("RESOURCE_PEARL"); opts.Add("RESOURCE_DYE"); }
+            }
+            else if (t.Height.Equals(FLAT_HEIGHT))
+            {
+                if (lush) { opts.Add("RESOURCE_BARLEY"); opts.Add("RESOURCE_CATTLE"); opts.Add("RESOURCE_MARBLE"); opts.Add("RESOURCE_HORSE"); opts.Add("RESOURCE_HONEY"); opts.Add("RESOURCE_SPICES"); opts.Add("RESOURCE_SILK"); }
+                else if (temp) { opts.Add("RESOURCE_WHEAT"); opts.Add("RESOURCE_MARBLE"); opts.Add("RESOURCE_SALT"); opts.Add("RESOURCE_HORSE"); opts.Add("RESOURCE_LAVENDER"); opts.Add("RESOURCE_CITRUS"); }
+                else if (arid) { opts.Add("RESOURCE_JADE"); opts.Add("RESOURCE_MARBLE"); opts.Add("RESOURCE_SALT"); opts.Add("RESOURCE_INCENSE"); }
+            }
+            else if (t.Height.Equals(HILL_HEIGHT))
+            {
+                if (lush) { opts.Add("RESOURCE_ORE"); opts.Add("RESOURCE_HONEY"); opts.Add("RESOURCE_CITRUS"); }
+                else if (temp) { opts.Add("RESOURCE_ORE"); opts.Add("RESOURCE_GOLD"); opts.Add("RESOURCE_SILVER"); opts.Add("RESOURCE_GEM"); opts.Add("RESOURCE_WINE"); opts.Add("RESOURCE_CITRUS"); }
+                else if (arid) { opts.Add("RESOURCE_ORE"); opts.Add("RESOURCE_GOLD"); opts.Add("RESOURCE_SILVER"); opts.Add("RESOURCE_GEM"); opts.Add("RESOURCE_JADE"); opts.Add("RESOURCE_INCENSE"); }
+            }
+            if (opts.Count == 0) return null;
+            return opts[random.Next(opts.Count)];
+        }
+
+        // The island's single caldera peak, on a self-mirror tile (odd row, x=W/2)
+        // so MirrorGameplay can't clobber it and it stays exactly central.
+        private void SetIslandCaldera()
+        {
+            int W = MapWidth, H = MapHeight, c = W / 2;
+            for (int rad = 0; rad < 5; rad++)
+                for (int s = -1; s <= 1; s += 2)
+                {
+                    int y = mIslandY + rad * s;
+                    if (y < 0 || y >= H || (y % 2) == 0 || !OnIsland(c, y)) continue;
+                    TileData t = GetTile(c, y);
+                    if (t.Terrain.Equals(WATER_TERRAIN)) continue;
+                    if (!t.CitySite.Equals(GetTile(0, 0).CitySite)) continue;   // never ON the prize site
+                    if (t.Terrain.Equals(URBAN_TERRAIN)) continue;
+                    t.Height = VOLCANO_HEIGHT; t.Terrain = T("TERRAIN_ARID"); return;
+                }
+        }
+
+        // The engine's AddVolcanicMountains peppers the whole range with volcanoes;
+        // a temperate Caldera Bay wants just the one caldera (on the island, set in
+        // PlaceCenterPrizes). Convert all the rest back to ordinary mountains.
+        // Lakes the engine pools in the wrong places read as "random water in the
+        // mountains". Two repairs, both RIVER-SAFE:
+        //  • a lake deep in the range zone with NO river feeding it → back to land
+        //    (it's an elevation-pit artifact, not a real water feature);
+        //  • any surviving lake flanked by mountains → soften those mountains to
+        //    hills, so it reads as a valley tarn instead of water walled in rock.
+        private void RepairLakes()
+        {
+            int W = MapWidth, H = MapHeight;
+            for (int y = 0; y < H; y++)
+                for (int x = 0; x < W; x++)
+                {
+                    TileData t = GetTile(x, y);
+                    if (!t.Height.Equals(LAKE_HEIGHT)) continue;
+                    int d = mSeaSouth ? y : (H - 1 - y);              // rows from the sea edge
+                    bool inRangeZone = d > 0.72 * (H - 1);
+                    int[] dx, dy; Neigh(y, out dx, out dy);
+                    // fed = a river actually TOUCHES this lake tile (that's what
+                    // keeps the river un-orphaned); a river merely nearby doesn't
+                    // justify a pond in the mountains.
+                    bool riverFed = IsRiver(t);
+                    // Cull artifact ponds: not fed by any river AND (deep in the
+                    // range zone OR cut off by the map border). River-fed tiles
+                    // always survive — culling them would orphan the river; this
+                    // naturally SHRINKS border tarns to their river-touching tiles.
+                    bool atEdge = x < 3 || x > W - 4;
+                    if ((inRangeZone || atEdge) && !riverFed)
+                    {
+                        t.Height = FLAT_HEIGHT;                       // artifact pond → land
+                        t.Terrain = TEMPERATE_TERRAIN;
+                        continue;
+                    }
+                    for (int k = 0; k < 6; k++)                        // open up walled-in tarns
+                    {
+                        int nx = x + dx[k], ny = y + dy[k];
+                        if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
+                        TileData n = GetTile(nx, ny);
+                        // never soften OUR spur/range walls — that would melt a
+                        // pass through a barrier that must stay solid
+                        if (n.Height.Equals(MOUNTAIN_HEIGHT)
+                            && (mOurMountain == null || !mOurMountain[n.ID]))
+                            n.Height = HILL_HEIGHT;
+                    }
+                }
+        }
+
+        // The engine sometimes grows a SECOND mountain wall a few rows in front of
+        // our locked range, creating a walled-off plateau shelf between the two
+        // (which then even collects city sites). Demote unlocked mountains in the
+        // piedmont band to hills — foothills, not a second wall. Our own locked
+        // tiles (the range and the spur seeds crossing the band) are untouched.
+        private void TamePiedmont()
+        {
+            int W = MapWidth, H = MapHeight;
+            for (int y = 0; y < H; y++)
+            {
+                int d = mSeaSouth ? y : (H - 1 - y);          // rows from the sea edge
+                if (d < H - 9 || d >= H - 3) continue;        // the band below the range
+                for (int x = 0; x < W; x++)
+                {
+                    TileData t = GetTile(x, y);
+                    if (t.Height.Equals(MOUNTAIN_HEIGHT)
+                        && (mOurMountain == null || !mOurMountain[t.ID]))
+                        t.Height = HILL_HEIGHT;
+                }
+            }
+        }
+
+        private void TameVolcanoes()
+        {
+            for (int i = 0; i < MapWidth * MapHeight; i++)
+            {
+                TileData t = GetTile(i);
+                if (t.Height.Equals(VOLCANO_HEIGHT)) t.Height = MOUNTAIN_HEIGHT;
+            }
+        }
+
+        // CoastalRainBasin grows a mountain range right along the SEA edge (its
+        // rain-shadow source). Caldera Bay keeps its mountains INLAND (the range
+        // on the far edge + the spurs), so the coast reads as a low coastal plain:
+        // demote mountains in the seaward third to hills. The climate/rain-shadow
+        // is already assigned by now, so the arid belts survive.
+        private void FlattenCoast()
+        {
+            int W = MapWidth, H = MapHeight;
+            double thresh = 0.30 * (H - 1);
+            for (int y = 0; y < H; y++)
+                for (int x = 0; x < W; x++)
+                {
+                    TileData t = GetTile(x, y);
+                    if (!t.Height.Equals(MOUNTAIN_HEIGHT)) continue;
+                    int d = mSeaSouth ? y : (H - 1 - y);     // rows from the sea edge
+                    bool coastal = d < thresh;               // the seaward third…
+                    if (!coastal)                            // …and any shoreline (incl. bay shores)
+                    {
+                        int[] dx, dy; Neigh(y, out dx, out dy);
+                        for (int k = 0; k < 6; k++)
+                        {
+                            int nx = x + dx[k], ny = y + dy[k];
+                            if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
+                            if (GetTile(nx, ny).Terrain.Equals(WATER_TERRAIN)) { coastal = true; break; }
+                        }
+                    }
+                    if (coastal)                              // a coast is low — and broken up
+                        t.Height = ((x * 31 + y * 17) % 3 == 0) ? FLAT_HEIGHT : HILL_HEIGHT;
+                }
+        }
+
+        // ---- city-site management (14–18 total, ≥8 apart, 2 central prizes) ----
+        private const double SITE_SPACE = 8.0;
+
+        private CitySiteType FirstSiteType(CitySiteType none)
+        {
+            for (int i = 0; i < MapWidth * MapHeight; i++)
+            { CitySiteType cs = GetTile(i).CitySite; if (!cs.Equals(none)) return cs; }
+            return none;
+        }
+        private bool Foundable(int x, int y, CitySiteType none)
+        {
+            if (x < 3 || x >= MapWidth - 3 || y < 2 || y >= MapHeight - 2) return false;
+            int d = mSeaSouth ? y : (MapHeight - 1 - y);     // rows from the sea edge
+            if (d >= MapHeight - 8) return false;            // never wedged against the range
+            TileData t = GetTile(x, y);
+            if (!t.CitySite.Equals(none)) return false;
+            if (t.Terrain.Equals(WATER_TERRAIN)) return false;
+            if (t.Height.Equals(MOUNTAIN_HEIGHT) || t.Height.Equals(VOLCANO_HEIGHT) || t.Height.Equals(LAKE_HEIGHT)) return false;
+            return true;
+        }
+        private static double TileDist(int ax, int ay, int bx, int by)
+        {
+            int aq = ax - ((ay + (ay & 1)) / 2), ar = ay;
+            int bq = bx - ((by + (by & 1)) / 2), br = by;
+            return (Math.Abs(aq - bq) + Math.Abs((-aq - ar) - (-bq - br)) + Math.Abs(ar - br)) / 2.0;
+        }
+
+        // the highland prize sits just in front of the RANGE (the mountain edge,
+        // opposite the sea) on the dead-centre self-mirror axis.
+        private void EnsureCentreCitySite()
+        {
+            int W = MapWidth, H = MapHeight, x = W / 2;
+            CitySiteType none = GetTile(0, 0).CitySite, sample = FirstSiteType(none);
+            if (sample.Equals(none)) return;
+            for (int y = 0; y < H; y++)
+            {
+                if ((y % 2) == 0) continue;
+                if (!GetTile(x, y).CitySite.Equals(none) && !OnIsland(x, y))
+                { mCentreSiteId = y * W + x; return; }
+            }
+            int dir = mSeaSouth ? -1 : 1;            // scan from the range toward the sea
+            int startY = mSeaSouth ? (H - 5) : 4;
+            // first try to seat it where there's real settleable land around it
+            // (so the highland city isn't a lone tile walled in by mountains)…
+            for (int pass = 0; pass < 2; pass++)
+                for (int k = 0; k < H; k++)
+                {
+                    int y = startY + dir * k;
+                    if (y < 0 || y >= H) break;
+                    if ((y % 2) == 0) continue;
+                    if (OnIsland(x, y) || !Foundable(x, y, none)) continue;
+                    if (pass == 0 && LandNeighbors(x, y) < 3) continue;   // not deep in the mountains
+                    GetTile(x, y).CitySite = sample; mCentreSiteId = y * W + x; return;
+                }
+        }
+        private int LandNeighbors(int x, int y)
+        {
+            int W = MapWidth, H = MapHeight, n = 0;
+            int[] dx, dy; Neigh(y, out dx, out dy);
+            for (int k = 0; k < 6; k++)
+            {
+                int nx = x + dx[k], ny = y + dy[k];
+                if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
+                TileData t = GetTile(nx, ny);
+                if (t.Terrain.Equals(WATER_TERRAIN)) continue;
+                if (t.Height.Equals(MOUNTAIN_HEIGHT) || t.Height.Equals(VOLCANO_HEIGHT)) continue;
+                n++;
+            }
+            return n;
+        }
+
+        private void FinalizeSites()
+        {
+            int W = MapWidth, H = MapHeight, c = W / 2;
+            CitySiteType none = GetTile(0, 0).CitySite, sample = FirstSiteType(none);
+            if (sample.Equals(none)) return;
+            // wipe centre+east sites EXCEPT the two prizes — the engine already
+            // rolled rich resources around those exact tiles, so they must stay.
+            for (int y = 0; y < H; y++)
+                for (int x = c; x < W; x++)
+                {
+                    int id = y * W + x;
+                    if (id == mIslandSiteId || id == mCentreSiteId) continue;
+                    if (!GetTile(x, y).CitySite.Equals(none)) GetTile(x, y).CitySite = none;
+                }
+            EnsureIslandCitySite();
+            EnsureCentreCitySite();
+            var avoid = new List<int[]>();
+            for (int y = 0; y < H; y++)
+                for (int x = c; x < W; x++)
+                    if (!GetTile(x, y).CitySite.Equals(none)) avoid.Add(new[] { x, y });
+            BalanceWestSites(avoid);
+            for (int y = 0; y < H; y++)
+                for (int x = 0; x < c; x++)
+                {
+                    if (GetTile(x, y).CitySite.Equals(none)) continue;
+                    int mxx = (y % 2 == 0) ? (W - 1 - x) : (W - x);
+                    if (mxx > c && mxx < W) GetTile(mxx, y).CitySite = sample;
+                }
+        }
+
+        private void BalanceWestSites(List<int[]> avoid)
+        {
+            int W = MapWidth, H = MapHeight;
+            CitySiteType none = GetTile(0, 0).CitySite, sample = FirstSiteType(none);
+            if (sample.Equals(none)) return;
+            var sites = new List<int[]>();
+            for (int y = 0; y < H; y++)
+                for (int x = 0; x < W / 2; x++)
+                {
+                    if (GetTile(x, y).CitySite.Equals(none)) continue;
+                    int dSea = mSeaSouth ? y : (H - 1 - y);
+                    if (x < 3 || x > W / 2 - 3 || y < 2 || y >= H - 2 || OnIsland(x, y)
+                        || dSea >= H - 8)                    // engine sites on the range shelf
+                    { GetTile(x, y).CitySite = none; continue; }
+                    sites.Add(new[] { x, y });
+                }
+            System.Func<int, double> nearest = (i) =>
+            {
+                double nd = double.MaxValue;
+                int mix = (sites[i][1] % 2 == 0) ? (W - 1 - sites[i][0]) : (W - sites[i][0]);
+                for (int j = 0; j < sites.Count; j++)
+                    if (i != j)
+                    {
+                        nd = Math.Min(nd, TileDist(sites[i][0], sites[i][1], sites[j][0], sites[j][1]));
+                        int mjx = (sites[j][1] % 2 == 0) ? (W - 1 - sites[j][0]) : (W - sites[j][0]);
+                        nd = Math.Min(nd, TileDist(mix, sites[i][1], mjx, sites[j][1]));
+                    }
+                foreach (var a in avoid)
+                {
+                    nd = Math.Min(nd, TileDist(sites[i][0], sites[i][1], a[0], a[1]));
+                    nd = Math.Min(nd, TileDist(mix, sites[i][1], a[0], a[1]));
+                }
+                return nd;
+            };
+            while (sites.Count > 0)
+            {
+                int worst = -1; double wd = double.MaxValue;
+                for (int i = 0; i < sites.Count; i++)
+                { double nd = nearest(i); if (nd < wd) { wd = nd; worst = i; } }
+                if (sites.Count <= 7 && wd >= SITE_SPACE) break;
+                GetTile(sites[worst][0], sites[worst][1]).CitySite = none;
+                sites.RemoveAt(worst);
+            }
+        }
+
+        // enforce exact L–R symmetry of terrain/resources (NOT sites/tribes —
+        // those are placed symmetric-by-construction separately).
+        private void MirrorGameplay()
+        {
+            int W = MapWidth, H = MapHeight;
+            for (int y = 0; y < H; y++)
+                for (int x = 0; x < W; x++)
+                {
+                    int mxx = (y % 2 == 0) ? (W - 1 - x) : (W - x);
+                    if (mxx <= x || mxx >= W) continue;
+                    TileData src = GetTile(x, y), dst = GetTile(mxx, y);
+                    dst.Terrain = src.Terrain; dst.Height = src.Height;
+                    dst.Vegetation = src.Vegetation; dst.Resource = src.Resource;
+                }
+        }
+
+        // ---- tribes: one tribe per side (different, horse-paired), one centre
+        // tribe (Huns only if rolled). CRITICAL: only tribes the ENGINE actually
+        // put in use this game are valid — a site of any other tribe degrades to
+        // plain barbarians in-game. So the pool is exactly the distinct tribes
+        // base.PlaceTribes() rolled, never a hardcoded list.
         protected override void PlaceTribes()
         {
             base.PlaceTribes();
@@ -266,77 +712,54 @@ namespace OwMapCreation
             CitySiteType noSite = GetTile(0, 0).CitySite;
             TribeType huns = infos.getType<TribeType>("TRIBE_HUNS");
 
-            // What did the engine roll? Use its natural pick for the west tribe
-            // (very "like the game"), and only allow Huns in the centre if they
-            // were among the rolled tribes.
+            // the engine's rolled NAMED tribes = the game's tribes-in-use (the
+            // generic barbarian/raider/rebel camps don't count as tribes)
+            int barb = (int)infos.getType<TribeType>("TRIBE_BARBARIANS");
+            int raid = (int)infos.getType<TribeType>("TRIBE_RAIDERS");
+            int rebl = (int)infos.getType<TribeType>("TRIBE_REBELS");
             bool hunsRolled = false;
-            TribeType engineChoice = none;
+            var pool = new List<TribeType>();
             for (int i = 0; i < W * H; i++)
             {
                 TribeType tb = GetTile(i).TribeSite;
                 if (tb.Equals(none)) continue;
-                if ((int)tb == (int)huns) hunsRolled = true;
-                else if (engineChoice.Equals(none)) engineChoice = tb;
+                if ((int)tb == (int)huns) { hunsRolled = true; continue; }
+                if ((int)tb == barb || (int)tb == raid || (int)tb == rebl) continue;
+                bool seen = false;
+                foreach (TribeType p in pool) if ((int)p == (int)tb) { seen = true; break; }
+                if (!seen) pool.Add(tb);
             }
+            if (pool.Count == 0 && hunsRolled) pool.Add(huns); // huns-only game: still tribes
+            if (pool.Count == 0) return;   // tribes disabled — leave the engine's camps
 
-            TribeType[] pool = BuildTribePool(huns);     // diplomacy, non-Huns
-            TribeType west = engineChoice.Equals(none) ? pool[0] : engineChoice;
-            TribeType east = PickPartner(west, pool);    // different + horse-paired
-            TribeType centre = hunsRolled ? huns : PickThird(west, east, pool);
+            // pick a side pair: DIFFERENT tribes in the same horse class if any
+            // such pair was rolled; otherwise the same tribe both sides (always
+            // valid, trivially horse-paired) — never a horse-vs-foot mismatch.
+            TribeType west = pool[0], east = pool[0];
+            bool found = false;
+            for (int i = 0; i < pool.Count && !found; i++)
+                for (int j = 0; j < pool.Count && !found; j++)
+                    if (i != j && IsHorseTribe(pool[i]) == IsHorseTribe(pool[j]))
+                    { west = pool[i]; east = pool[j]; found = true; }
 
-            for (int i = 0; i < W * H; i++)              // clear the engine's scatter
+            // centre: Huns if the engine rolled them, else a third rolled tribe,
+            // else reuse the side tribe (still a valid in-use tribe).
+            TribeType centre = west;
+            if (hunsRolled) centre = huns;
+            else foreach (TribeType p in pool)
+                if ((int)p != (int)west && (int)p != (int)east) { centre = p; break; }
+
+            for (int i = 0; i < W * H; i++)
                 if (!GetTile(i).TribeSite.Equals(none)) GetTile(i).TribeSite = none;
-
-            // West player's tribe at a west site; the mirror tile gets the EAST
-            // tribe (same position → fair, different identity → varied).
             PlaceMirroredPair((int)(W * 0.24), H / 2 + 2, west, east, none, noSite);
-            // Centre tribe alone on the contested axis (a self-mirror tile, so it
-            // belongs to neither half and is never doubled).
             PlaceCentreAxis((int)(H * 0.55), centre, none, noSite);
         }
-
         private bool IsHorseTribe(TribeType t)
         {
             int scy = (int)infos.getType<TribeType>("TRIBE_SCYTHIANS");
             int num = (int)infos.getType<TribeType>("TRIBE_NUMIDIANS");
             return (int)t == scy || (int)t == num;
         }
-
-        // The diplomacy (non-barbarian) tribe pool, in a fixed order so the pick
-        // is deterministic for a given engine roll. Excludes Huns (centre-only).
-        private TribeType[] BuildTribePool(TribeType huns)
-        {
-            string[] names = { "TRIBE_GAULS", "TRIBE_VANDALS", "TRIBE_DANES",
-                               "TRIBE_THRACIANS", "TRIBE_SCYTHIANS", "TRIBE_NUMIDIANS" };
-            var list = new System.Collections.Generic.List<TribeType>();
-            foreach (var n in names)
-            {
-                TribeType t = infos.getType<TribeType>(n);
-                if ((int)t >= 0 && (int)t != (int)huns) list.Add(t);
-            }
-            return list.ToArray();
-        }
-
-        // A partner tribe for the east player: different from the west tribe and
-        // in the SAME horse class — a horse tribe is paired with the other horse
-        // tribe; a foot tribe with another foot tribe.
-        private TribeType PickPartner(TribeType west, TribeType[] pool)
-        {
-            bool wHorse = IsHorseTribe(west);
-            foreach (TribeType t in pool)
-                if ((int)t != (int)west && IsHorseTribe(t) == wHorse) return t;
-            foreach (TribeType t in pool)           // fallback: any different tribe
-                if ((int)t != (int)west) return t;
-            return west;
-        }
-
-        private TribeType PickThird(TribeType a, TribeType b, TribeType[] pool)
-        {
-            foreach (TribeType t in pool)
-                if ((int)t != (int)a && (int)t != (int)b) return t;
-            return a;
-        }
-
         private bool EligibleTribe(TileData t, TribeType none, CitySiteType noSite)
         {
             if (t.Terrain.Equals(WATER_TERRAIN)) return false;
@@ -344,11 +767,7 @@ namespace OwMapCreation
             if (!t.CitySite.Equals(noSite)) return false;
             return t.TribeSite.Equals(none);
         }
-
-        // Place the west tribe near (sx,sy) on the west half and the east tribe
-        // on that tile's exact mirror — identical position, different identity.
-        private void PlaceMirroredPair(int sx, int sy, TribeType west, TribeType east,
-                                       TribeType none, CitySiteType noSite)
+        private void PlaceMirroredPair(int sx, int sy, TribeType west, TribeType east, TribeType none, CitySiteType noSite)
         {
             int W = MapWidth, H = MapHeight;
             for (int rad = 0; rad < 12; rad++)
@@ -356,22 +775,14 @@ namespace OwMapCreation
                     for (int dx = -rad; dx <= rad; dx++)
                     {
                         int x = sx + dx, y = sy + dy;
-                        if (x < 0 || x >= W || y < 0 || y >= H) continue;
-                        if (x >= W / 2) continue;                 // west half only
+                        if (x < 0 || x >= W || y < 0 || y >= H || x >= W / 2) continue;
                         int mxx = (y % 2 == 0) ? (W - 1 - x) : (W - x);
                         if (mxx < 0 || mxx >= W) continue;
-                        TileData t = GetTile(x, y);
-                        TileData m = GetTile(mxx, y);
-                        if (!EligibleTribe(t, none, noSite)) continue;
-                        if (!EligibleTribe(m, none, noSite)) continue;
-                        t.TribeSite = west;
-                        m.TribeSite = east;
-                        return;
+                        TileData t = GetTile(x, y), m = GetTile(mxx, y);
+                        if (!EligibleTribe(t, none, noSite) || !EligibleTribe(m, none, noSite)) continue;
+                        t.TribeSite = west; m.TribeSite = east; return;
                     }
         }
-
-        // The centre tribe sits on a self-mirror tile (odd row, x=W/2) so it is
-        // exactly central — never on a player's side, never doubled.
         private void PlaceCentreAxis(int sy, TribeType tribe, TribeType none, CitySiteType noSite)
         {
             int W = MapWidth, H = MapHeight, x = W / 2;
@@ -379,305 +790,11 @@ namespace OwMapCreation
                 for (int s = -1; s <= 1; s += 2)
                 {
                     int y = sy + rad * s;
-                    if (y < 0 || y >= H || (y % 2) == 0) continue;   // need self-mirror row
+                    if (y < 0 || y >= H || (y % 2) == 0) continue;
                     TileData t = GetTile(x, y);
                     if (!EligibleTribe(t, none, noSite)) continue;
-                    t.TribeSite = tribe;
-                    return;
+                    t.TribeSite = tribe; return;
                 }
-        }
-
-        // Our terrain is finalised here — BEFORE the engine builds continents,
-        // cities, urban tiles and resources — so all of that engine work (the
-        // city-site founding tiles, natural resource distribution, vegetation…)
-        // survives untouched, exactly as the built-in maps do.
-        protected override void SetUnreachableAreas()
-        {
-            base.SetUnreachableAreas();
-            ApplyLayout();
-        }
-
-        // The ONLY thing we still do after the engine: enforce mirror symmetry.
-        // The engine mirrors city sites but not resources/urban/terrain detail,
-        // and a duel must be fair. MirrorGameplay COPIES west→east (it preserves
-        // the engine's urban/resources, just mirrors them) — no re-stamping.
-        protected override void CalculateClosestCitySites()
-        {
-            base.CalculateClosestCitySites();
-            PlaceCenterPrizes();   // a light bias at the two contested centres
-            MirrorGameplay();      // then enforce mirror symmetry
-        }
-
-        // A LIGHT prize bias on the two contested centres (everything else is the
-        // engine's natural distribution). Placed on the west half; MirrorGameplay
-        // mirrors it. Island: gold + a pearl. Top-centre highlands: marble + jade.
-        private void PlaceCenterPrizes()
-        {
-            int W = MapWidth, H = MapHeight;
-            double cx = (W - 1) / 2.0;
-            VegetationType noVeg = GetTile(0, 0).Vegetation;   // an empty (deep-ocean) tile
-
-            // Set a resource on a tile, making the tile VALID for it: correct
-            // terrain + height, and vegetation cleared (e.g. gold/marble can't
-            // sit under trees). MirrorGameplay mirrors all of this east.
-            System.Action<TileData, TerrainType, HeightType, string> put =
-                (t, ter, h, res) =>
-                { t.Terrain = ter; t.Height = h; t.Vegetation = noVeg; t.Resource = R(res); };
-
-            bool gold = false, pearl = false;
-            for (int y = 0; y < H && (!gold || !pearl); y++)
-                for (int x = 0; x < W / 2 && (!gold || !pearl); x++)
-                {
-                    if (!OnIsland(x, y)) continue;
-                    TileData t = GetTile(x, y);
-                    if (!gold && t.Height.Equals(HILL_HEIGHT))
-                    { put(t, TEMPERATE_TERRAIN, HILL_HEIGHT, "RESOURCE_GOLD"); gold = true; }   // gold: temperate/arid hill
-                    else if (!pearl && t.Terrain.Equals(WATER_TERRAIN) && t.Height.Equals(COAST_HEIGHT))
-                    { t.Resource = R("RESOURCE_PEARL"); pearl = true; }                          // pearl: coast water
-                }
-            bool marble = false, jade = false;
-            for (int y = H - RANGE_ROWS - 1; y >= SEA_ROWS && (!marble || !jade); y--)
-                for (int x = (int)cx - 1; x >= (int)cx - 6 && (!marble || !jade); x--)
-                {
-                    TileData t = GetTile(x, y);
-                    if (t.Terrain.Equals(WATER_TERRAIN)) continue;
-                    if (t.Height.Equals(MOUNTAIN_HEIGHT) || t.Height.Equals(VOLCANO_HEIGHT)) continue;
-                    if (!marble && t.Height.Equals(FLAT_HEIGHT))
-                    { put(t, LUSH_TERRAIN, FLAT_HEIGHT, "RESOURCE_MARBLE"); marble = true; }      // marble: lush/temperate/arid flat
-                    else if (!jade && t.Height.Equals(HILL_HEIGHT))
-                    { put(t, T("TERRAIN_ARID"), HILL_HEIGHT, "RESOURCE_JADE"); jade = true; }     // jade: arid flat/hill
-                }
-        }
-
-        // The engine places city sites, resources and tribes AFTER DoMirrorMap,
-        // so on a mirror map they come out asymmetric (e.g. 5 sites one side, 4
-        // the other). Force exact symmetry: copy the canonical (west) half's
-        // sites/resources onto the east half (tribes are placed separately, one
-        // distinct tribe per side). Terrain is already symmetric by
-        // construction, so these land on identical ground.
-        private void MirrorGameplay()
-        {
-            // Caldera Bay is always a mirror duel, so enforce it unconditionally
-            // (don't depend on the MirrorMap option being wired in headless gen).
-            int W = MapWidth, H = MapHeight;
-            // Explicit hex row-stagger mirror (even rows W-1-x, odd rows W-x) —
-            // this matches owmapgen's start mirror AND works for every tile,
-            // including water (the engine's GetMirrorTileOfThisTile returns -1
-            // for water, which left the island's pearls/fish unmirrored).
-            // Copy each pair once, west (lower x) → east.
-            for (int y = 0; y < H; y++)
-            {
-                for (int x = 0; x < W; x++)
-                {
-                    int mxx = (y % 2 == 0) ? (W - 1 - x) : (W - x);
-                    if (mxx <= x || mxx >= W) continue;   // west→east, skip self/edge
-                    TileData src = GetTile(x, y);
-                    TileData dst = GetTile(mxx, y);
-                    dst.Terrain = src.Terrain;      // also mirror the resource-driven
-                    dst.Height = src.Height;        // terrain tweaks (temperate farms, etc.)
-                    dst.Vegetation = src.Vegetation; // engine forests/scrub
-                    dst.CitySite = src.CitySite;
-                    dst.Resource = src.Resource;
-                    // NB: TribeSite is intentionally NOT mirrored — PlaceTribes
-                    // already placed a DIFFERENT tribe per side at mirror
-                    // positions; copying west→east here would clobber the east
-                    // tribe and make both sides identical.
-                }
-            }
-        }
-
-        private static double Smoothstep(double t)
-        {
-            if (t <= 0) return 0; if (t >= 1) return 1; return t * t * (3 - 2 * t);
-        }
-
-        // Continuous height at (x, y). x grows east, y grows north (y=0 = south
-        // sea edge). Left-right symmetry is enforced afterwards by MirrorGameplay,
-        // so the raw-x noise here may be asymmetric (the east half is overwritten).
-        private double Height(int x, int y, int W, int H)
-        {
-            double cx = (W - 1) / 2.0;
-            double xs = x - cx, axs = Math.Abs(xs);
-            // Base rises from the sea but plateaus at highland level.
-            double slope = Math.Min(y - SEA_ROWS, NORTH_PLATEAU);
-
-            // --- the drowned central channel: a real estuary that cuts deep ---
-            // Wide at the mouth, tapering as it climbs to ~½–⅔ of the map height,
-            // its width breathing with latitude. The trunk is deep enough to beat
-            // the rising slope, so the channel is genuinely WATER, not just low
-            // land — the bay really bites into the continent.
-            double bayReach = SEA_ROWS + mBayReachFrac * (H - 1 - SEA_ROWS);
-            double hf = Math.Min(1.0, Math.Max(0.0, (y - SEA_ROWS) / Math.Max(1.0, bayReach - SEA_ROWS))); // 0 mouth → 1 head
-            double wob = 1.0 + mBayWobble * Fbm(y * 0.13 + 3.1, 1.7);
-            double bayHalf = Math.Max(1.5, W * mBayHalf * wob * (1.0 - 0.7 * hf));   // narrows inland
-            double across = Math.Max(0.0, 1.0 - axs / bayHalf);
-            double trunk = 24.0 * across * Smoothstep((1.0 - hf) / 0.25);            // fades out near the head
-
-            double denom = Math.Max(1, H - 1 - SEA_ROWS);
-            double north = Math.Min(1.0, Math.Max(0.0, (y - SEA_ROWS) / denom));     // 0 coast → 1 top
-            double taper = Math.Pow(north, SPUR_REACH);
-
-            // --- a VARIABLE set of mountain spurs (count/offset/height/width all
-            // per-gen), each an asymmetric finger; take the tallest at this tile.
-            double ridge = 0;
-            for (int i = 0; i < mNumSpurs; i++)
-            {
-                double off = axs - W * mSpurOff[i];                  // <0 inner, >0 outer
-                double w = (off >= 0 ? mSpurOutW[i] : mSpurInW[i]) * (0.5 + 2.0 * north);
-                ridge = Math.Max(ridge, mSpurH[i] * Math.Exp(-(off * off) / (w * w)));
-            }
-            ridge *= taper;
-
-            // --- organic relief & a ragged, meandering coastline ---
-            // Strong seeded fBm, active from the coast up (the deep-sea floor
-            // below y≈2 stays clean so the bottom edge is solid sea).
-            double fade = Math.Min(1.0, Math.Max(0.0, (y - 2) / 6.0));
-            double n = Fbm(x * mNoiseFreq + 11.3, y * mNoiseFreq + 5.7);
-
-            double e = slope - trunk + ridge + mNoiseAmp * n * fade;
-
-            // --- top range: a wobbly southern edge + a central gorge breach
-            // (where the river/bay exits the range), both jittered by the noise. ---
-            double gorge = W * mGorgeHalf + 1.5 * Fbm(x * 0.2 + 2.0, y * 0.2 + 9.0);
-            double rangeEdge = (H - 1) - (RANGE_ROWS - 1) - mRangeRough * Math.Max(0.0, Fbm(x * 0.18 + 7.0, 1.3));
-            if (y >= rangeEdge && axs > gorge)
-                e = Math.Max(e, MTN_E + 4);
-            return e;
-        }
-
-        private void ApplyLayout()
-        {
-            EnsureVariation();
-            int W = MapWidth, H = MapHeight;
-            double cx = (W - 1) / 2.0;
-            // the island's water ring & moat band wobble a touch with the noise
-            double islandEdge = mIslandR + mIslandMoat;
-
-            for (int x = 0; x < W; x++)
-            {
-                double xs = x - cx;
-                for (int y = 0; y < H; y++)
-                {
-                    TileData tile = GetTile(x, y);
-
-                    // Preserve engine LAKES — they're where rivers terminate, so
-                    // keeping them ensures every river ends in water, not on land.
-                    if (tile.Height.Equals(LAKE_HEIGHT)) continue;
-
-                    // --- volcanic island in the bay (symmetric about cx) ---
-                    double dx = xs, dy = y - mIslandY;
-                    double idist = Math.Sqrt(dx * dx + dy * dy);
-                    if (idist <= mIslandR)
-                    {
-                        tile.Terrain = LUSH_TERRAIN;
-                        if (idist <= 1.1) tile.Height = VOLCANO_HEIGHT;       // the caldera peak
-                        else if (idist <= 2.2) tile.Height = HILL_HEIGHT;     // volcanic slopes
-                        else tile.Height = FLAT_HEIGHT;                       // fertile coastal flat
-                        continue;
-                    }
-                    if (idist <= islandEdge)
-                    {
-                        // forced water ring: the island is always its own land
-                        // mass, reachable only by crossing water.
-                        tile.Terrain = WATER_TERRAIN;
-                        tile.Height = COAST_HEIGHT;
-                        continue;
-                    }
-
-                    double e = Height(x, y, W, H);
-                    if (e < 0)
-                    {
-                        tile.Terrain = WATER_TERRAIN;
-                        tile.Height = e > -COAST_BAND ? COAST_HEIGHT : OCEAN_HEIGHT;
-                    }
-                    else if (e < mMoatE && Math.Abs(xs) < W * mMoatHalf)
-                    {
-                        // the estuary's floodplain: deltaic marsh, or arid basin
-                        tile.Terrain = mDesertMoat ? DESERT_TERRAIN : WET_TERRAIN;
-                        tile.Height = FLAT_HEIGHT;
-                    }
-                    else
-                    {
-                        // dry land: a moisture-driven climate sets the terrain,
-                        // elevation sets the height.
-                        tile.Terrain = Climate(x, y, W, H);
-                        tile.Height = e < HILL_E ? FLAT_HEIGHT
-                                    : e < MTN_E ? HILL_HEIGHT : MOUNTAIN_HEIGHT;
-                    }
-                }
-            }
-            FixCoast();
-        }
-
-        // Proper coast: every water tile touching land becomes shallow COAST
-        // (a beach/shallow ring), deeper water stays OCEAN — so the land/water
-        // transition is never harsh, however irregular the coastline. Engine
-        // lakes are left alone (they're their own water type).
-        private void FixCoast()
-        {
-            int W = MapWidth, H = MapHeight;
-            for (int y = 0; y < H; y++)
-                for (int x = 0; x < W; x++)
-                {
-                    TileData t = GetTile(x, y);
-                    if (!t.Terrain.Equals(WATER_TERRAIN)) continue;
-                    if (t.Height.Equals(LAKE_HEIGHT)) continue;
-                    int[] dx, dy; Neigh(y, out dx, out dy);
-                    bool nearLand = false;
-                    for (int k = 0; k < 6; k++)
-                    {
-                        int nx = x + dx[k], ny = y + dy[k];
-                        if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
-                        if (!GetTile(nx, ny).Terrain.Equals(WATER_TERRAIN)) { nearLand = true; break; }
-                    }
-                    t.Height = nearLand ? COAST_HEIGHT : OCEAN_HEIGHT;
-                }
-        }
-
-        // Climate (mirror-symmetric: even in x). MOST of the plain is temperate.
-        // Lush hugs water — the river valleys, the coast and the estuary — while
-        // the dry spur tops and inland pockets turn arid. (Vegetation/forests are
-        // left to the engine's BuildVegetation, as the built-in maps do.)
-        private TerrainType Climate(int x, int y, int W, int H)
-        {
-            double cx = (W - 1) / 2.0, xs = x - cx;
-            double span = Math.Max(1, (H - MTN_ROWS) - SEA_ROWS);
-            double mid = Math.Min(1.0, Math.Max(0.0, (y - SEA_ROWS) / span)); // 0 coast → 1 range
-
-            double coast = Math.Max(0.0, 1.2 - (y - SEA_ROWS) / 5.0);          // wet near the south sea
-            double estuary = Math.Max(0.0, 1.0 - Math.Abs(xs) / (W * 0.22)) * (1.0 - mid);
-            double dry = 0;                                                    // rain shadow on the spurs
-            for (int i = 0; i < mNumSpurs; i++)
-            {
-                double dSpur = Math.Abs(Math.Abs(xs) - W * mSpurOff[i]);
-                dry = Math.Max(dry, Math.Exp(-(dSpur * dSpur) / (mSpurOutW[i] * mSpurOutW[i])) * mid);
-            }
-            double noise = 0.18 * Fbm(x * 0.13 + 60.0, y * 0.13 + 17.0);       // seeded climate variation
-            double moisture = 0.45 + Math.Max(coast, estuary) - 0.7 * dry + noise; // temperate baseline
-
-            if (moisture > 0.95) return LUSH_TERRAIN;        // narrow: coast, estuary, river valleys
-            if (moisture > 0.22) return TEMPERATE_TERRAIN;   // the broad majority
-            return T("TERRAIN_ARID");                        // dry spur flanks
-        }
-
-        private TerrainType T(string z) { return infos.getType<TerrainType>(z); }
-        private ResourceType R(string z) { return infos.getType<ResourceType>(z); }
-
-        private const int MTN_ROWS = 2; // top rows treated as the range crest
-
-        // True if (x,y) is on/around the bay island (the volcano + its water
-        // ring). Used by PlaceCenterPrizes to keep the island's prize distinct.
-        private bool OnIsland(int x, int y)
-        {
-            double dx = x - (MapWidth - 1) / 2.0, dy = y - mIslandY;
-            return Math.Sqrt(dx * dx + dy * dy) <= mIslandR + mIslandMoat;
-        }
-
-        // even-/odd-row hex neighbour offsets (used by FixCoast).
-        private static void Neigh(int y, out int[] dx, out int[] dy)
-        {
-            if ((y & 1) == 1) { dx = new[] { -1, 0, 1, 0, -1, -1 }; dy = new[] { 1, 1, 0, -1, -1, 0 }; }
-            else { dx = new[] { 0, 1, 1, 1, 0, -1 }; dy = new[] { 1, 1, 0, -1, -1, 0 }; }
         }
     }
 }

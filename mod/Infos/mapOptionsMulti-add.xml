@@ -1,14 +1,18 @@
 <?xml version="1.0"?>
-<!-- The marsh / desert / random selector for the estuary floodplain moat.
-     owmapgen flag: map-option MAP_OPTIONS_MULTI_CALDERA_MOAT=MAP_OPTION_CALDERA_DESERT -->
+<!-- The Climate (latitude) selector. Random rolls a per-gen regime; the others
+     pin it: Mediterranean (warm, arid scrub + some inland desert), Temperate
+     (the balanced default), Northern (cold, tundra uplands). The estuary is
+     always tidal marsh regardless.
+     owmapgen flag: map-option MAP_OPTIONS_MULTI_CALDERA_CLIMATE=MAP_OPTION_CALDERA_NORTHERN -->
 <Root>
   <Entry>
-    <zType>MAP_OPTIONS_MULTI_CALDERA_MOAT</zType>
-    <Name>TEXT_MAP_OPTIONS_MULTI_CALDERA_MOAT</Name>
+    <zType>MAP_OPTIONS_MULTI_CALDERA_CLIMATE</zType>
+    <Name>TEXT_MAP_OPTIONS_MULTI_CALDERA_CLIMATE</Name>
     <Choices>
       <zValue>MAP_OPTION_CALDERA_RANDOM</zValue>
-      <zValue>MAP_OPTION_CALDERA_MARSH</zValue>
-      <zValue>MAP_OPTION_CALDERA_DESERT</zValue>
+      <zValue>MAP_OPTION_CALDERA_MEDITERRANEAN</zValue>
+      <zValue>MAP_OPTION_CALDERA_TEMPERATE</zValue>
+      <zValue>MAP_OPTION_CALDERA_NORTHERN</zValue>
     </Choices>
     <Default>MAP_OPTION_CALDERA_RANDOM</Default>
     <bSinglePlayerValid>1</bSinglePlayerValid>

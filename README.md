@@ -16,7 +16,7 @@ lanes and passes. The estuary floodplain is a **marsh-or-desert moat** ringing t
 contested middle. A **volcanic island** sits in the bay as a neutral prize, and a
 **mountain city** in the highlands is a second prize to fight over.
 
-It is always generated **wide · smallest · mirror** — a fair 1v1: everything west of
+It is always generated at its own **wide duel size (64×43) · mirror** — a fair 1v1: everything west of
 centre is mirrored east, so neither player has a terrain or resource edge.
 
 ### Designed-in features
@@ -31,7 +31,8 @@ centre is mirrored east, so neither player has a terrain or resource edge.
   (if one side is Scythian/Numidian the other is too); barb-vs-tribe site counts match
   per side; **Huns** appear in the centre only when the engine actually rolls them, and
   never on a player's side.
-- **"Estuary Floodplain"** New-Game option: Marsh / Desert / Random.
+- **"Climate (latitude)"** New-Game option: Random / Mediterranean (warm) /
+  Temperate / Northern (cold tundra).
 
 ## Install (players)
 

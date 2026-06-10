@@ -6,11 +6,15 @@
     <Name>TEXT_MAP_OPTION_CALDERA_RANDOM</Name>
   </Entry>
   <Entry>
-    <zType>MAP_OPTION_CALDERA_MARSH</zType>
-    <Name>TEXT_MAP_OPTION_CALDERA_MARSH</Name>
+    <zType>MAP_OPTION_CALDERA_MEDITERRANEAN</zType>
+    <Name>TEXT_MAP_OPTION_CALDERA_MEDITERRANEAN</Name>
   </Entry>
   <Entry>
-    <zType>MAP_OPTION_CALDERA_DESERT</zType>
-    <Name>TEXT_MAP_OPTION_CALDERA_DESERT</Name>
+    <zType>MAP_OPTION_CALDERA_TEMPERATE</zType>
+    <Name>TEXT_MAP_OPTION_CALDERA_TEMPERATE</Name>
+  </Entry>
+  <Entry>
+    <zType>MAP_OPTION_CALDERA_NORTHERN</zType>
+    <Name>TEXT_MAP_OPTION_CALDERA_NORTHERN</Name>
   </Entry>
 </Root>
