@@ -324,16 +324,34 @@ class CalderaBaySweep(unittest.TestCase):
             # river-fed highland tarns are a legitimate engine feature (rivers
             # that can't reach the sea pool into lakes); ARTIFACT ponds — with no
             # river anywhere near — are not, and neither is water walled in rock.
+            # judged per lake COMPONENT: a tarn is river-fed if ANY of its
+            # tiles touches a river (the script protects whole terminal tarns,
+            # not single tiles)
             range_lakes = walled = 0
+            lseen = set()
             for i, t in enumerate(tiles):
                 if _t(t, "Height") != "HEIGHT_LAKE":
                     continue
                 x, y = i % w, i // w
-                d = y if south else h - 1 - y
-                fed = river(x, y) or any(river(nx, ny) for nx, ny in neighbors(x, y)
-                                         if 0 <= nx < w and 0 <= ny < h)
-                if d > 0.72 * (h - 1) and not fed:
-                    range_lakes += 1
+                if (x, y) not in lseen:
+                    comp, stack = [], [(x, y)]
+                    while stack:
+                        cx, cy = stack.pop()
+                        if (cx, cy) in lseen or not (0 <= cx < w and 0 <= cy < h):
+                            continue
+                        if _t(tl(cx, cy), "Height") != "HEIGHT_LAKE":
+                            continue
+                        lseen.add((cx, cy))
+                        comp.append((cx, cy))
+                        stack.extend(neighbors(cx, cy))
+                    fed = any(river(cx, cy)
+                              or any(river(nx, ny) for nx, ny in neighbors(cx, cy)
+                                     if 0 <= nx < w and 0 <= ny < h)
+                              for cx, cy in comp)
+                    in_zone = any((cy if south else h - 1 - cy) > 0.72 * (h - 1)
+                                  for cx, cy in comp)
+                    if in_zone and not fed:
+                        range_lakes += 1
                 m = sum(1 for nx, ny in neighbors(x, y)
                         if 0 <= nx < w and 0 <= ny < h
                         and hgt(nx, ny) in ("HEIGHT_MOUNTAIN", "HEIGHT_VOLCANO"))
@@ -439,6 +457,19 @@ class CalderaBaySweep(unittest.TestCase):
                                and hexdist((i % w, i // w), isite) <= 3)
                     if near < 3:
                         problems.append(f"{name}: island prize has {near} resources")
+                # the island must touch the sea edge (a half-island volcano)
+                # and sit behind a deep moat: >=6 land-to-land from the
+                # mainland, so >=3 ocean (non-coast) tiles separate the two
+                # coast fringes and no city can tile-buy a bridge to it
+                edge_y = 0 if south else h - 1
+                if not any(y == edge_y for x, y in isl):
+                    problems.append(f"{name}: island does not touch the sea edge")
+                mainland = {(i % w, i // w) for i, t in enumerate(tiles)
+                            if _t(t, "Terrain") != "TERRAIN_WATER"
+                            and (i % w, i // w) not in isl}
+                gap = min(hexdist(a, b) for a in isl for b in mainland)
+                if gap < 6:
+                    problems.append(f"{name}: island moat only {gap} land-to-land")
             c = w // 2
             cen = [(c, y) for y in range(h)
                    if tiles[y * w + c].find("CitySite") is not None]

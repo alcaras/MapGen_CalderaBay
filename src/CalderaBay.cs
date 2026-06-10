@@ -183,6 +183,15 @@ namespace OwMapCreation
             t.Terrain = WATER_TERRAIN;
             t.Height = OCEAN_HEIGHT;
         }
+        private void LockOcean(TileData t)
+        {
+            // deep water, height-locked: never becomes COAST, so city borders
+            // can't claim it — a real moat that takes a boat to cross.
+            LockTileTerrain(t, WATER_TERRAIN, true);
+            LockTileHeight(t, OCEAN_HEIGHT, true);
+            t.Terrain = WATER_TERRAIN;
+            t.Height = OCEAN_HEIGHT;
+        }
         private void LockLand(TileData t, HeightType h, TerrainType terr)
         {
             LockTileHeight(t, h, true);
@@ -330,26 +339,34 @@ namespace OwMapCreation
                 }
             }
 
-            // The half-island: lush flats with a hill core (slopes for the
-            // caldera and its gold), clipped by the map edge, ringed by ≥2
-            // tiles of locked water on the sea side so it is always its own
-            // landmass — a cone rising out of the ocean at the map border.
+            // The half-island: a WIDE cone (elliptical, 1.5× across) of lush
+            // flats with a hill core, clipped by the map edge, then a free-
+            // height water ring (its own coast forms there) and a 3-tile
+            // height-locked OCEAN moat — far enough from any mainland coast
+            // that city borders can never tile-buy a bridge to it.
             mIslandX = W / 2;
             mIslandY = mSeaSouth ? islandD : (H - 1 - islandD);
-            int reach = (int)Math.Ceiling(mIslandR) + 2;
-            for (int dy = -reach; dy <= reach; dy++)
-                for (int dx = -reach; dx <= reach; dx++)
+            int reachY = (int)Math.Ceiling(mIslandR) + 8;
+            int reachX = (int)Math.Ceiling(1.2 * (mIslandR + 6.0)) + 1;
+            for (int dy = -reachY; dy <= reachY; dy++)
+                for (int dx = -reachX; dx <= reachX; dx++)
                 {
                     int x = mIslandX + dx, y = mIslandY + dy;
                     if (x < 0 || x >= W || y < 0 || y >= H) continue;
-                    double dist = Math.Sqrt(dx * dx + dy * dy);
+                    double e = IslandE(x, y);
+                    // the moat's outer shell is rounder than the island (the
+                    // coast pass turns ANY land-adjacent water to coast, locks
+                    // or not — only raw distance to land keeps the gap deep)
+                    double eOut = Math.Sqrt(Math.Pow(dx / 1.2, 2) + (double)dy * dy);
                     TileData t = GetTile(x, y);
-                    if (dist <= 1.4)
+                    if (e <= 1.4)
                         LockLand(t, HILL_HEIGHT, TEMPERATE_TERRAIN);   // volcanic slopes (gold-valid)
-                    else if (dist <= mIslandR)
+                    else if (e <= mIslandR)
                         LockLand(t, FLAT_HEIGHT, LUSH_TERRAIN);        // fertile apron
-                    else if (dist <= mIslandR + 2.0)
-                        LockWater(t);                                  // the guaranteed ring
+                    else if (e <= mIslandR + 1.5)
+                        LockWater(t);                                  // the island's own coast ring
+                    else if (eOut <= mIslandR + 6.0)
+                        LockOcean(t);                                  // the deep moat (no tile-buy)
                 }
         }
         private bool mSeaSouth;
@@ -362,11 +379,15 @@ namespace OwMapCreation
 
         private TerrainType T(string z) { return infos.getType<TerrainType>(z); }
         private ResourceType R(string z) { return infos.getType<ResourceType>(z); }
+        private const double ISLAND_SX = 1.5;       // horizontal stretch (a wide cone)
+        private double IslandE(int x, int y)        // elliptical "radius" from the core
+        {
+            double dx = (x - mIslandX) / ISLAND_SX, dy = y - mIslandY;
+            return Math.Sqrt(dx * dx + dy * dy);
+        }
         private bool OnIsland(int x, int y)
         {
-            int dx = x - mIslandX, dy = y - mIslandY;
-            double r = mIslandR + 1.5;              // the island + its water ring
-            return dx * dx + dy * dy <= r * r;
+            return IslandE(x, y) <= mIslandR + 1.5; // the island + its coast ring
         }
         private static void Neigh(int y, out int[] dx, out int[] dy)
         {
