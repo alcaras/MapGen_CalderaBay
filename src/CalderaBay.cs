@@ -167,20 +167,24 @@ namespace OwMapCreation
                         else LockLand(t, FLAT_HEIGHT, TEMPERATE_TERRAIN);   // the gorge pass
                         continue;
                     }
+                    // flanking SPURS — wandering but CONTINUOUS mountain seed-lines:
+                    // a spur is a hard barrier (the lanes go AROUND its tip, never
+                    // through it). Checked BEFORE the buffer band so the wall runs
+                    // unbroken all the way INTO the range (a gap here was exactly
+                    // the "pass at the top of the spur" bug — TamePiedmont demotes
+                    // unlocked mountains in that band, so only a locked seed
+                    // survives there).
+                    bool onSpur = false;
+                    for (int i = 0; i < nSpurs && !onSpur; i++)
+                        if (Math.Abs(xs - spurAt[i][y]) < 0.9 && inf > 0.42) onSpur = true;
+                    if (onSpur) { LockLand(t, MOUNTAIN_HEIGHT, TEMPERATE_TERRAIN); continue; }
+
                     if (d >= H - 7)
                     {
                         LockTileTerrain(t, TEMPERATE_TERRAIN, true);        // land, but natural height
                         t.Terrain = TEMPERATE_TERRAIN;
                         continue;
                     }
-
-                    // flanking SPURS — wandering but CONTINUOUS mountain seed-lines:
-                    // a spur is a hard barrier (the lanes go AROUND its tip, never
-                    // through it). The wander keeps it organic; lake repair handles
-                    // any river pooling at the wall.
-                    for (int i = 0; i < nSpurs; i++)
-                        if (Math.Abs(xs - spurAt[i][y]) < 0.9 && inf > 0.42)
-                        { LockLand(t, MOUNTAIN_HEIGHT, TEMPERATE_TERRAIN); break; }
                 }
             }
 
@@ -767,34 +771,52 @@ namespace OwMapCreation
             else foreach (TribeType p in mTribePool)
                 if ((int)p != (int)west && (int)p != (int)east) { centre = p; break; }
 
-            // the centre tribe garrisons the highland prize city
-            if (mCentreSiteId >= 0) GetTile(mCentreSiteId).TribeSite = centre;
+            TribeType barbs = infos.getType<TribeType>("TRIBE_BARBARIANS");
 
-            // each side's tribe holds the site CLOSEST TO THE CENTRE of its half
-            // (the contested forward site) — never the capital-anchor (west-most)
-            // and never a prize. The east twin is the west site's exact mirror.
+            // the centre tribe garrisons the highland prize city; barbarians
+            // guard the island prize (the third barb camp)
+            if (mCentreSiteId >= 0) GetTile(mCentreSiteId).TribeSite = centre;
+            if (mIslandSiteId >= 0) GetTile(mIslandSiteId).TribeSite = barbs;
+
+            // Per side: the CAPITAL (west-most site, where the start lands) and
+            // its NEAREST site stay FREE (start + first expansion); the most
+            // coastal of the rest is a BARBARIAN camp; every other site is held
+            // by the side's TRIBE. The east half mirrors the west exactly.
             CitySiteType noSite = GetTile(0, 0).CitySite;
-            int bestId = -1; double bestD = 1e9;
-            int westmostX = W;
+            var wsites = new List<int[]>();
             for (int y = 0; y < H; y++)
                 for (int x = 0; x < c; x++)
                     if (!GetTile(x, y).CitySite.Equals(noSite) && !OnIsland(x, y))
-                        westmostX = Math.Min(westmostX, x);
-            for (int y = 0; y < H; y++)
-                for (int x = 0; x < c; x++)
-                {
-                    if (GetTile(x, y).CitySite.Equals(noSite) || OnIsland(x, y)) continue;
-                    if (x <= westmostX) continue;            // leave the capital area free
-                    double d = c - x;                        // smaller = closer to the centre seam
-                    if (d < bestD) { bestD = d; bestId = y * W + x; }
-                }
-            if (bestId >= 0)
+                        wsites.Add(new[] { x, y });
+            if (wsites.Count == 0) return;
+
+            int capIdx = 0;
+            for (int i = 1; i < wsites.Count; i++)
+                if (wsites[i][0] < wsites[capIdx][0]) capIdx = i;
+            int freeIdx = -1; double bestFree = 1e9;
+            for (int i = 0; i < wsites.Count; i++)
             {
-                int bx = bestId % W, by = bestId / W;
-                GetTile(bx, by).TribeSite = west;
+                if (i == capIdx) continue;
+                double d = TileDist(wsites[i][0], wsites[i][1], wsites[capIdx][0], wsites[capIdx][1]);
+                if (d < bestFree) { bestFree = d; freeIdx = i; }
+            }
+            int barbIdx = -1; int bestSea = int.MaxValue;
+            for (int i = 0; i < wsites.Count; i++)
+            {
+                if (i == capIdx || i == freeIdx) continue;
+                int dSea = mSeaSouth ? wsites[i][1] : (H - 1 - wsites[i][1]);
+                if (dSea < bestSea) { bestSea = dSea; barbIdx = i; }
+            }
+            for (int i = 0; i < wsites.Count; i++)
+            {
+                if (i == capIdx || i == freeIdx) continue;
+                int bx = wsites[i][0], by = wsites[i][1];
+                TribeType who = (i == barbIdx) ? barbs : west;
+                TribeType whoEast = (i == barbIdx) ? barbs : east;
+                GetTile(bx, by).TribeSite = who;
                 int mxx = (by % 2 == 0) ? (W - 1 - bx) : (W - bx);
                 if (mxx > c && mxx < W && !GetTile(mxx, by).CitySite.Equals(noSite))
-                    GetTile(mxx, by).TribeSite = east;
+                    GetTile(mxx, by).TribeSite = whoEast;
             }
         }
 

@@ -242,6 +242,9 @@ class CalderaBayMap(unittest.TestCase):
 
     # ---- tribes ----
     def test_tribes(self):
+        # Per side: ONE named tribe type holding several sites, plus one barb
+        # camp; capitals/expansions free; the centre holds a named tribe garrison
+        # (the highland prize) and the island is barb-guarded.
         c = self.w // 2
         west, east, centre = [], [], []
         for i, t in enumerate(self.tiles):
@@ -250,16 +253,16 @@ class CalderaBayMap(unittest.TestCase):
                 continue
             x = i % self.w
             (west if x < c else east if x > c else centre).append(tr)
-        self.assertEqual(len(set(west)), 1, "exactly one tribe west")
-        self.assertEqual(len(set(east)), 1, "exactly one tribe east")
-        # different tribes per side when the rolled pool allows a horse-paired
-        # pair; identical sides are the legitimate fallback otherwise
-        for s in west + east:
-            self.assertFalse(any(b in s for b in NON_DIPLO),
-                             f"player tribe must be a diplomacy tribe, not {s}")
-        self.assertEqual(bool(set(west) & HORSE), bool(set(east) & HORSE),
+        wnamed = set(s for s in west if "BARBARIAN" not in s)
+        enamed = set(s for s in east if "BARBARIAN" not in s)
+        self.assertEqual(len(wnamed), 1, f"one named tribe west, got {wnamed}")
+        self.assertEqual(len(enamed), 1, f"one named tribe east, got {enamed}")
+        for s in wnamed | enamed:
+            self.assertFalse(any(b in s for b in ("RAIDER", "REBEL", "ANARCHY")),
+                             f"player tribe must be a real tribe, not {s}")
+        self.assertEqual(bool(wnamed & HORSE), bool(enamed & HORSE),
                          "horse tribes must be paired")
-        self.assertGreaterEqual(len(centre), 1, "a centre tribe should exist")
+        self.assertGreaterEqual(len(centre), 1, "centre garrisons should exist")
 
 
 class CalderaBaySweep(unittest.TestCase):
@@ -445,8 +448,37 @@ class CalderaBaySweep(unittest.TestCase):
                     continue
                 if t.find("CitySite") is None:
                     problems.append(f"{name}: tribe {tr} not on a city site")
-                if i % w != c and any(b in tr for b in NON_DIPLO):
-                    problems.append(f"{name}: {tr} on a player side")
+                if any(b in tr for b in ("RAIDER", "REBEL", "ANARCHY")):
+                    problems.append(f"{name}: {tr} placed as a camp")
+            # tribe-site distribution: 2-3 barb camps, the rest of the held
+            # sites named tribes, and >=4 free sites (starts + expansions)
+            n_free = n_barb = n_tribe = 0
+            for i, t in enumerate(tiles):
+                if t.find("CitySite") is None:
+                    continue
+                tr = _t(t, "TribeSite")
+                if not tr:
+                    n_free += 1
+                elif "BARBARIAN" in tr:
+                    n_barb += 1
+                else:
+                    n_tribe += 1
+            if not (2 <= n_barb <= 3):
+                problems.append(f"{name}: {n_barb} barb camps (want 2-3)")
+            if n_tribe < 5:
+                problems.append(f"{name}: only {n_tribe} tribe-held sites")
+            if n_free < 4:
+                problems.append(f"{name}: only {n_free} free sites")
+            # spur walls must run unbroken into the range: every row of the
+            # piedmont band has at least one mountain on each side
+            for dd in range(h - 7, h - 3):
+                yy = dd if south else h - 1 - dd
+                wm = sum(1 for x in range(3, c)
+                         if _t(tiles[yy * w + x], "Height") == "HEIGHT_MOUNTAIN")
+                em = sum(1 for x in range(c + 1, w - 3)
+                         if _t(tiles[yy * w + x], "Height") == "HEIGHT_MOUNTAIN")
+                if wm == 0 or em == 0:
+                    problems.append(f"{name}: spur gap in piedmont row d={dd}")
             # no ghost urban: every urban tile belongs to a site within 2
             site_xy = [(i % w, i // w) for i, t in enumerate(tiles)
                        if t.find("CitySite") is not None]
