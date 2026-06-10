@@ -98,7 +98,8 @@ namespace OwMapCreation
         // the engine computes unreachable areas — they read as a massif instead.
         protected override void SetUnreachableAreas()
         {
-            TamePiedmont();        // open the engine's second wall FIRST…
+            TameMassifs();         // break giant organic massifs in the plain…
+            TamePiedmont();        // …open the engine's second wall…
             SealPockets();         // …then fill whatever stays sealed…
             base.SetUnreachableAreas();   // …so the fog marking sees final passability
         }
@@ -678,6 +679,50 @@ namespace OwMapCreation
                         && (mOurMountain == null || !mOurMountain[t.ID]))
                         t.Height = HILL_HEIGHT;
                 }
+            }
+        }
+
+        // The engine can also grow a giant ORGANIC massif out in the open plain
+        // (often budding off a locked spur seed) — a 30-40 tile wall that boxes
+        // a capital into a corner pocket. Keep plain mountains as small scenic
+        // clumps only: any unlocked mountain cluster bigger than a few tiles in
+        // the plain zone (below the piedmont band) is demoted to hills. Our
+        // locked walls (range, spurs) are never touched.
+        private void TameMassifs()
+        {
+            int W = MapWidth, H = MapHeight;
+            bool InPlain(int idx)
+            {
+                int d = mSeaSouth ? (idx / W) : (H - 1 - idx / W);
+                return d < H - 13;
+            }
+            bool Organic(TileData t) => t.Height.Equals(MOUNTAIN_HEIGHT)
+                && (mOurMountain == null || !mOurMountain[t.ID]);
+            var seen = new bool[W * H];
+            var comp = new List<TileData>();
+            for (int i = 0; i < W * H; i++)
+            {
+                TileData t0 = GetTile(i);
+                if (seen[i] || !InPlain(i) || !Organic(t0)) continue;
+                comp.Clear();
+                var stack = new Stack<int>();
+                stack.Push(i); seen[i] = true;
+                while (stack.Count > 0)
+                {
+                    int j = stack.Pop();
+                    comp.Add(GetTile(j));
+                    int jx = j % W, jy = j / W; int[] ddx, ddy; Neigh(jy, out ddx, out ddy);
+                    for (int k = 0; k < 6; k++)
+                    {
+                        int nx = jx + ddx[k], ny = jy + ddy[k];
+                        if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
+                        int nid = ny * W + nx;
+                        if (seen[nid] || !InPlain(nid) || !Organic(GetTile(nid))) continue;
+                        seen[nid] = true; stack.Push(nid);
+                    }
+                }
+                if (comp.Count > 6)
+                    foreach (TileData t in comp) t.Height = HILL_HEIGHT;
             }
         }
 

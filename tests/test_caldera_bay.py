@@ -300,11 +300,11 @@ class CalderaBaySweep(unittest.TestCase):
         for name, root in self.maps:
             w = int(root.attrib["MapWidth"])
             tiles = root.findall("Tile")
-            yield name, w, len(tiles) // w, tiles
+            yield name, root, w, len(tiles) // w, tiles
 
     def test_sweep_no_water_anomalies(self):
         problems = []
-        for name, w, h, tiles in self.each():
+        for name, root, w, h, tiles in self.each():
             def tl(x, y):
                 return tiles[y * w + x]
             def wat(x, y):
@@ -357,7 +357,7 @@ class CalderaBaySweep(unittest.TestCase):
 
     def test_sweep_structure(self):
         problems = []
-        for name, w, h, tiles in self.each():
+        for name, root, w, h, tiles in self.each():
             sites = sum(1 for t in tiles if t.find("CitySite") is not None)
             volc = sum(1 for t in tiles if _t(t, "Height") == "HEIGHT_VOLCANO")
             def wat(x, y):
@@ -529,6 +529,44 @@ class CalderaBaySweep(unittest.TestCase):
                 xy = (i % w, i // w)
                 if not any(hexdist(xy, s) <= 2 for s in site_xy):
                     problems.append(f"{name}: ghost urban at {xy}")
+            # no giant detached massif in the open plain: a mountain component
+            # reaching below the piedmont band must either run into the range
+            # (a locked spur) or stay a small scenic clump — big organic walls
+            # box capitals into corner pockets (TameMassifs)
+            mseen = set()
+            for i, t in enumerate(tiles):
+                xy = (i % w, i // w)
+                if xy in mseen or _t(t, "Height") != "HEIGHT_MOUNTAIN":
+                    continue
+                comp, stack = [], [xy]
+                has_plain = has_range = False
+                while stack:
+                    cx, cy = stack.pop()
+                    if (cx, cy) in mseen or not (0 <= cx < w and 0 <= cy < h):
+                        continue
+                    if _t(tiles[cy * w + cx], "Height") != "HEIGHT_MOUNTAIN":
+                        continue
+                    mseen.add((cx, cy))
+                    comp.append((cx, cy))
+                    dd = cy if south else h - 1 - cy
+                    has_plain |= dd < h - 13
+                    has_range |= dd >= h - 3
+                    stack.extend(neighbors(cx, cy))
+                if has_plain and not has_range and len(comp) > 7:
+                    problems.append(
+                        f"{name}: detached {len(comp)}-tile massif in the plain"
+                        f" near {comp[0]}")
+            # capitals must not start boxed in: plenty of passable land close by
+            for p in root.findall("./PlayerStarts/PlayerStart"):
+                sxy = (int(p.attrib["X"]), int(p.attrib["Y"]))
+                open_land = sum(
+                    1 for i, t in enumerate(tiles)
+                    if hexdist((i % w, i // w), sxy) <= 4
+                    and _t(t, "Terrain") != "TERRAIN_WATER"
+                    and _t(t, "Height") not in ("HEIGHT_MOUNTAIN", "HEIGHT_VOLCANO"))
+                if open_land < 30:
+                    problems.append(
+                        f"{name}: capital {sxy} boxed in ({open_land} open tiles)")
         self.assertEqual(problems, [], "structure problems:\n" + "\n".join(problems))
 
 
