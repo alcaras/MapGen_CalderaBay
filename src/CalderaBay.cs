@@ -211,7 +211,11 @@ namespace OwMapCreation
             // BETWEEN the mirrored spurs.
             int nSpurs = 1;
             double[] spurOff = new double[nSpurs];
-            spurOff[0] = 0.35 + 0.05 * (random.Next(100) / 100.0);   // 0.35–0.40 of W from centre
+            // 0.35–0.40 of W from the map EDGE (= 0.10–0.15 from centre): the
+            // spurs hug the central corridor, the capitals sit in the wide
+            // outer plains, and the 4 central-tribe cities are framed between
+            // the mirrored pair.
+            spurOff[0] = 0.10 + 0.05 * (random.Next(100) / 100.0);
             mSpurOffFrac = spurOff[0];
 
             // WOBBLED COASTLINE: the locked sea band's depth varies per column (a
@@ -245,7 +249,10 @@ namespace OwMapCreation
                 {
                     drift += (random.Next(3) - 1) * 0.5;             // wander ±½ tile per row
                     drift = Math.Max(-2.5, Math.Min(2.5, drift));    // stay near the axis
-                    spurAt[i][y] = W * spurOff[i] + drift;
+                    // never dip inside the gorge mouth (xs<0.08W is the locked
+                    // pass through the range) — the wall must top out against
+                    // the range wall, not open a back door around the gorge
+                    spurAt[i][y] = Math.Max(W * 0.08 + 1.8, W * spurOff[i] + drift);
                 }
             }
 
@@ -277,7 +284,7 @@ namespace OwMapCreation
                     // boundary, which FillLakes then lined with a lake chain.
                     if (d >= H - 3)
                     {
-                        if (xs > W * 0.11) LockLand(t, MOUNTAIN_HEIGHT, TEMPERATE_TERRAIN);
+                        if (xs > W * 0.08) LockLand(t, MOUNTAIN_HEIGHT, TEMPERATE_TERRAIN);
                         else
                         {
                             LockLand(t, FLAT_HEIGHT, TEMPERATE_TERRAIN);    // the gorge pass
