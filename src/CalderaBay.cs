@@ -256,6 +256,7 @@ namespace OwMapCreation
                     spurAt[i][y] = Math.Max(W * 0.08 + 1.8, W * spurOff[i] + drift);
                 }
             }
+            mSpurAt = spurAt[0];   // per-row wall position, for the corridor site rule
 
             for (int x = 0; x < W; x++)
             {
@@ -338,6 +339,7 @@ namespace OwMapCreation
         }
         private bool mSeaSouth;
         private double mSpurOffFrac;
+        private double[] mSpurAt;
         private int mIslandX, mIslandY;
         private double mIslandR;
 
@@ -776,17 +778,27 @@ namespace OwMapCreation
             { CitySiteType cs = GetTile(i).CitySite; if (!cs.Equals(none)) return cs; }
             return none;
         }
-        private bool Foundable(int x, int y, CitySiteType none)
+        private bool Foundable(int x, int y, CitySiteType none, bool allowCorridor = false)
         {
             if (x < 3 || x >= MapWidth - 3 || y < 2 || y >= MapHeight - 2) return false;
             int d = mSeaSouth ? y : (MapHeight - 1 - y);     // rows from the sea edge
             if (d >= MapHeight - 8) return false;            // never wedged against the range
             if (mReach != null && mReach[y * MapWidth + x] != mMainComp) return false;  // land-reachable from the caps
+            if (!allowCorridor && InsideSpurFrame(x, y)) return false;  // corridor = prizes only
             TileData t = GetTile(x, y);
             if (!t.CitySite.Equals(none)) return false;
             if (t.Terrain.Equals(WATER_TERRAIN)) return false;
             if (t.Height.Equals(MOUNTAIN_HEIGHT) || t.Height.Equals(VOLCANO_HEIGHT) || t.Height.Equals(LAKE_HEIGHT)) return false;
             return true;
+        }
+        // the corridor between the mirrored spurs is reserved for the TWO
+        // prizes (island + highland) — every other site stays on the player
+        // side of its spur.
+        private bool InsideSpurFrame(int x, int y)
+        {
+            if (mSpurAt == null) return false;
+            double xs = Math.Abs(x - (MapWidth - 1) / 2.0);
+            return xs < mSpurAt[y] + 1.6;
         }
         private static double TileDist(int ax, int ay, int bx, int by)
         {
@@ -820,7 +832,7 @@ namespace OwMapCreation
                     int y = startY + dir * k;
                     if (y < 0 || y >= H) break;
                     if ((y % 2) == 0) continue;
-                    if (OnIsland(x, y) || !Foundable(x, y, none)) continue;
+                    if (OnIsland(x, y) || !Foundable(x, y, none, true)) continue;
                     if (pass == 0 && LandNeighbors(x, y) < 3) continue;   // not deep in the mountains
                     GetTile(x, y).CitySite = sample; mCentreSiteId = y * W + x; return;
                 }
@@ -924,6 +936,7 @@ namespace OwMapCreation
                     int dSea = mSeaSouth ? y : (H - 1 - y);
                     if (x < 3 || x > W / 2 - 3 || y < 2 || y >= H - 2 || OnIsland(x, y)
                         || dSea >= H - 8                     // engine sites on the range shelf
+                        || InsideSpurFrame(x, y)             // the corridor is prizes-only
                         || (mReach != null && mReach[y * W + x] != mMainComp))   // or cut off by land
                     { GetTile(x, y).CitySite = none; continue; }
                     sites.Add(new[] { x, y });
@@ -1112,22 +1125,15 @@ namespace OwMapCreation
                 if (i != capIdx && i != freeIdx && role[i] == null) remaining++;
             if (remaining >= 3)
             {
-                // the central tribe's forward site sits INSIDE the corridor
-                // between the spurs whenever a site exists there
-                double corridor = c - mSpurOffFrac * W;     // west spur's x position
+                // the central tribe's FORWARD site: the corridor holds only the
+                // two prizes, so it's each side's site closest to the seam —
+                // the one pressed up against its spur
                 int pick = -1, bestX = -1;
                 for (int i = 0; i < wsites.Count; i++)
                 {
                     if (i == capIdx || i == freeIdx || role[i] != null) continue;
-                    if (wsites[i][0] <= corridor) continue;  // outside the spur frame
                     if (wsites[i][0] > bestX) { bestX = wsites[i][0]; pick = i; }
                 }
-                if (pick < 0)
-                    for (int i = 0; i < wsites.Count; i++)   // fallback: closest to seam
-                    {
-                        if (i == capIdx || i == freeIdx || role[i] != null) continue;
-                        if (wsites[i][0] > bestX) { bestX = wsites[i][0]; pick = i; }
-                    }
                 if (pick >= 0) { role[pick] = centre; kind[pick] = 3; }
             }
             for (int i = 0; i < wsites.Count; i++)

@@ -529,6 +529,18 @@ class CalderaBaySweep(unittest.TestCase):
                 xy = (i % w, i // w)
                 if not any(hexdist(xy, s) <= 2 for s in site_xy):
                     problems.append(f"{name}: ghost urban at {xy}")
+            # the corridor between the spurs holds ONLY the two prizes (island
+            # + highland) — every other site stays on the player side of its
+            # spur (the spur line never sits closer than ~6.9 to the seam, so
+            # any non-prize site under xs=7 is inside the frame)
+            prize = set(isl) if volc else set()
+            if cen:
+                prize.add(hp)
+            for x, y in site_xy:
+                if (x, y) in prize:
+                    continue
+                if abs(x - (w - 1) / 2) < 7:
+                    problems.append(f"{name}: non-prize site ({x},{y}) between the spurs")
             # no giant detached massif in the open plain: a mountain component
             # reaching below the piedmont band must either run into the range
             # (a locked spur) or stay a small scenic clump — big organic walls
