@@ -227,16 +227,31 @@ namespace OwMapCreation
             double wob = 0;
             for (int k = 0; k <= half; k++)
             {
-                wob += (random.Next(3) - 1) * 0.8;
-                wob = Math.Max(-1.5, Math.Min(2.5, wob));
+                wob += (random.Next(3) - 1) * 0.9;
+                wob = Math.Max(-2.0, Math.Min(3.0, wob));
                 depthHalf[k] = Math.Max(6, seaBand + (int)Math.Round(wob));
             }
 
-            // BIG VOLCANIC ISLAND in a lagoon basin: radius ~2.6–3.4 (≈25–35 land
-            // tiles), sitting in a widened bay-mouth basin that guarantees a ≥2-tile
-            // water ring around it (so it is always sea-locked).
-            mIslandR = 2.6 + random.Next(9) / 10.0;          // 2.6–3.4
-            int islandD = seaBand + (int)Math.Ceiling(mIslandR) + 2;
+            // WOBBLED RANGE: the locked mountain wall's depth also varies per
+            // column (2–6 rows, the same mirror-symmetric walk), so the range
+            // bulges into lobes and pulls back into foothill valleys instead
+            // of a ruler line. The engine grows organic hills/peaks in the
+            // dips (the buffer band leaves height free there).
+            int[] rangeHalf = new int[half + 1];
+            double rwob = 0;
+            for (int k = 0; k <= half; k++)
+            {
+                rwob += (random.Next(3) - 1) * 0.9;
+                rwob = Math.Max(-1.5, Math.Min(3.5, rwob));
+                rangeHalf[k] = Math.Max(2, Math.Min(6, 3 + (int)Math.Round(rwob)));
+            }
+
+            // VOLCANIC HALF-ISLAND pressed against the sea edge: the cone juts
+            // out of the ocean at the map border (clipped by it — not a complete
+            // island), still sea-locked from the mainland by a guaranteed
+            // water ring on its inland side.
+            mIslandR = 3.0 + random.Next(6) / 10.0;          // 3.0–3.5
+            int islandD = 2;                                 // centre 2 rows off the edge
 
             // WANDERING spur seed-lines: per-row drift so the locked seeds aren't
             // dead-straight walls (the engine grows ridges around them). Drift is
@@ -284,7 +299,7 @@ namespace OwMapCreation
                     // the range) but leaves HEIGHT free — locking it flat used to
                     // force the engine's elevation into a trough along the lock
                     // boundary, which FillLakes then lined with a lake chain.
-                    if (d >= H - 3)
+                    if (d >= H - rangeHalf[Math.Min(k, half)])
                     {
                         if (xs > W * 0.08) LockLand(t, MOUNTAIN_HEIGHT, TEMPERATE_TERRAIN);
                         else
@@ -315,10 +330,10 @@ namespace OwMapCreation
                 }
             }
 
-            // VOLCANIC ISLAND in its lagoon BASIN — a real island (≈25–35 tiles):
-            // lush flats with a hill ring near the centre (slopes for the caldera
-            // and its gold), ringed by ≥2 tiles of locked water so it is always
-            // its own landmass. The basin also widens the lower bay naturally.
+            // The half-island: lush flats with a hill core (slopes for the
+            // caldera and its gold), clipped by the map edge, ringed by ≥2
+            // tiles of locked water on the sea side so it is always its own
+            // landmass — a cone rising out of the ocean at the map border.
             mIslandX = W / 2;
             mIslandY = mSeaSouth ? islandD : (H - 1 - islandD);
             int reach = (int)Math.Ceiling(mIslandR) + 2;

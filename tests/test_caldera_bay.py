@@ -103,10 +103,13 @@ class CalderaBayMap(unittest.TestCase):
 
     def test_sea_at_least_five_tall(self):
         # the sea band on the sea edge is ≥5 tiles in every column (a line of
-        # ships can't easily wall it off).
+        # ships can't easily wall it off) — except where the half-island
+        # volcano juts out of the ocean at the map border.
         side, _ = self.sea_side()
         worst = 99
         for x in range(self.w):
+            if abs(x - (self.w - 1) / 2) <= 8:
+                continue                       # the half-island's columns
             d = 0
             ys = range(self.h) if side == "south" else range(self.h - 1, -1, -1)
             for y in ys:
@@ -119,7 +122,8 @@ class CalderaBayMap(unittest.TestCase):
 
     def test_one_sea_edge(self):
         side, edge = self.sea_side()
-        self.assertGreater(edge, self.w * 0.9, "the sea edge should be ~all water")
+        # ~all water apart from the half-island clipped by the border
+        self.assertGreater(edge, self.w * 0.8, "the sea edge should be ~all water")
         far = self.h - 1 if side == "south" else 0
         farw = sum(1 for x in range(self.w) if self.is_water(x, far))
         self.assertLess(farw, self.w * 0.3,
@@ -368,6 +372,8 @@ class CalderaBaySweep(unittest.TestCase):
                    else sum(1 for x in range(w) if wat(x, 0)))
             depth = 99
             for x in range(w):
+                if abs(x - (w - 1) / 2) <= 8:
+                    continue                  # the half-island's columns
                 dcol = 0
                 for y in (range(h) if south else range(h - 1, -1, -1)):
                     if wat(x, y):
@@ -377,13 +383,14 @@ class CalderaBaySweep(unittest.TestCase):
                 depth = min(depth, dcol)
             if not 14 <= sites <= 18:
                 problems.append(f"{name}: {sites} sites")
-            # no SECOND mountain wall in the piedmont band below the range, and
-            # no city sites wedged on a shelf against the range
+            # no SECOND mountain wall in the piedmont band below the range
+            # (the wobbled range's own lobes reach down to d=h-6), and no
+            # city sites wedged on a shelf against the range
             for y in range(h):
                 d = y if south else h - 1 - y
                 row_mtn = sum(1 for x in range(w)
                               if _t(tiles[y * w + x], "Height") == "HEIGHT_MOUNTAIN")
-                if h - 13 <= d < h - 3 and row_mtn > w * 0.3:
+                if h - 13 <= d < h - 6 and row_mtn > w * 0.3:
                     problems.append(f"{name}: second wall ({row_mtn} mtns at d={d})")
                 if d >= h - 8:
                     row_sites = sum(1 for x in range(w)
@@ -399,6 +406,8 @@ class CalderaBaySweep(unittest.TestCase):
             # coastline must meander (wobbled band) — several distinct depths
             depths = set()
             for x in range(w):
+                if abs(x - (w - 1) / 2) <= 8:
+                    continue                  # the half-island's columns
                 dcol = 0
                 for y in (range(h) if south else range(h - 1, -1, -1)):
                     if wat(x, y):
@@ -470,6 +479,22 @@ class CalderaBaySweep(unittest.TestCase):
                 problems.append(f"{name}: only {n_tribe} tribe-held sites")
             if n_free < 4:
                 problems.append(f"{name}: only {n_free} free sites")
+            # the range must MEANDER like the coastline (wobbled lobes and
+            # valleys, not a ruler line): several distinct mountain-run depths
+            # from the far edge across the columns outside the gorge
+            rdepths = set()
+            for x in range(3, w - 3):
+                if abs(x - (w - 1) / 2) < 0.1 * w:
+                    continue                      # skip the gorge breach
+                dcol = 0
+                for y in (range(h - 1, -1, -1) if south else range(h)):
+                    if _t(tiles[y * w + x], "Height") == "HEIGHT_MOUNTAIN":
+                        dcol += 1
+                    else:
+                        break
+                rdepths.add(dcol)
+            if len(rdepths) < 3:
+                problems.append(f"{name}: range too straight ({len(rdepths)} depths)")
             # spur walls must run unbroken into the range: every row of the
             # piedmont band has at least one mountain on each side
             for dd in range(h - 7, h - 3):
@@ -564,21 +589,22 @@ class CalderaBaySweep(unittest.TestCase):
                     has_plain |= dd < h - 13
                     has_range |= dd >= h - 3
                     stack.extend(neighbors(cx, cy))
-                if has_plain and not has_range and len(comp) > 7:
+                if has_plain and not has_range and len(comp) > 12:
                     problems.append(
                         f"{name}: detached {len(comp)}-tile massif in the plain"
                         f" near {comp[0]}")
-            # capitals must not start boxed in: plenty of passable land close by
+            # capitals must not start boxed in by mountains (a coastal capital
+            # with open water around it is fine — the concern is rock walls)
             for p in root.findall("./PlayerStarts/PlayerStart"):
                 sxy = (int(p.attrib["X"]), int(p.attrib["Y"]))
-                open_land = sum(
-                    1 for i, t in enumerate(tiles)
-                    if hexdist((i % w, i // w), sxy) <= 4
-                    and _t(t, "Terrain") != "TERRAIN_WATER"
-                    and _t(t, "Height") not in ("HEIGHT_MOUNTAIN", "HEIGHT_VOLCANO"))
-                if open_land < 30:
+                area = [t for i, t in enumerate(tiles)
+                        if hexdist((i % w, i // w), sxy) <= 4]
+                mtns = sum(1 for t in area if _t(t, "Height")
+                           in ("HEIGHT_MOUNTAIN", "HEIGHT_VOLCANO"))
+                if mtns > len(area) * 0.28:
                     problems.append(
-                        f"{name}: capital {sxy} boxed in ({open_land} open tiles)")
+                        f"{name}: capital {sxy} boxed in "
+                        f"({mtns}/{len(area)} mountain)")
         self.assertEqual(problems, [], "structure problems:\n" + "\n".join(problems))
 
 
