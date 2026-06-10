@@ -259,7 +259,7 @@ namespace OwMapCreation
             // out of the ocean at the map border (clipped by it — not a complete
             // island), still sea-locked from the mainland by a guaranteed
             // water ring on its inland side.
-            mIslandR = 3.0 + random.Next(6) / 10.0;          // 3.0–3.5
+            mIslandR = 2.7 + random.Next(4) / 10.0;          // 2.7–3.0 (×2.5 across)
             int islandD = 2;                                 // centre 2 rows off the edge
 
             // WANDERING spur seed-lines: per-row drift so the locked seeds aren't
@@ -347,7 +347,7 @@ namespace OwMapCreation
             mIslandX = W / 2;
             mIslandY = mSeaSouth ? islandD : (H - 1 - islandD);
             int reachY = (int)Math.Ceiling(mIslandR) + 8;
-            int reachX = (int)Math.Ceiling(1.2 * (mIslandR + 6.0)) + 1;
+            int reachX = (int)Math.Ceiling(1.5 * (mIslandR + 6.0)) + 1;
             for (int dy = -reachY; dy <= reachY; dy++)
                 for (int dx = -reachX; dx <= reachX; dx++)
                 {
@@ -357,7 +357,7 @@ namespace OwMapCreation
                     // the moat's outer shell is rounder than the island (the
                     // coast pass turns ANY land-adjacent water to coast, locks
                     // or not — only raw distance to land keeps the gap deep)
-                    double eOut = Math.Sqrt(Math.Pow(dx / 1.2, 2) + (double)dy * dy);
+                    double eOut = Math.Sqrt(Math.Pow(dx / 1.5, 2) + (double)dy * dy);
                     TileData t = GetTile(x, y);
                     if (e <= 1.4)
                         LockLand(t, HILL_HEIGHT, TEMPERATE_TERRAIN);   // volcanic slopes (gold-valid)
@@ -379,7 +379,7 @@ namespace OwMapCreation
 
         private TerrainType T(string z) { return infos.getType<TerrainType>(z); }
         private ResourceType R(string z) { return infos.getType<ResourceType>(z); }
-        private const double ISLAND_SX = 1.5;       // horizontal stretch (a wide cone)
+        private const double ISLAND_SX = 2.5;       // horizontal stretch (a wide cone)
         private double IslandE(int x, int y)        // elliptical "radius" from the core
         {
             double dx = (x - mIslandX) / ISLAND_SX, dy = y - mIslandY;
@@ -1182,9 +1182,11 @@ namespace OwMapCreation
             int named = 2;                                       // highland + island
             for (int i = 0; i < wsites.Count; i++)
                 if (kind[i] == 2 || kind[i] == 3) named += 2;    // site + its mirror
+            // shed to FREE (not barb) so the mirrored 2-barb-per-side layout
+            // holds whatever the site count — extras become neutral expansion
             int budget = 2 * (tribesToUse != null ? tribesToUse.Count : 4);
             for (int i = wsites.Count - 1; i >= 0 && named > budget; i--)
-                if (kind[i] == 2) { role[i] = barbs; kind[i] = 1; named -= 2; }
+                if (kind[i] == 2) { role[i] = null; kind[i] = 0; named -= 2; }
 
             // apply + mirror EXACTLY (same role; side tribe west↔east)
             for (int i = 0; i < wsites.Count; i++)

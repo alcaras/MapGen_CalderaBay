@@ -176,7 +176,7 @@ class CalderaBayMap(unittest.TestCase):
                         continue
                     seen.add((cx, cy)); comp.append((cx, cy))
                     stack.extend(neighbors(cx, cy))
-                if 16 <= len(comp) <= 60 and any(
+                if 16 <= len(comp) <= 75 and any(
                         self.tile(a, b).find("CitySite") is not None for a, b in comp):
                     found = True
         self.assertTrue(found, "the bay island should be small, isolated, and hold a site")
