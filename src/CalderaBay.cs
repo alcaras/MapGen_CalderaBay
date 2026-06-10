@@ -55,6 +55,113 @@ namespace OwMapCreation
         // keep lakes to a few (the basin default over-fills our locked terrain)
         protected override short LakePercent { get { return 3; } }
 
+        // A 2-player game only puts ~2 tribes in use, but the duel layout needs
+        // THREE distinct roles (west side, east side, central) with a horse-
+        // paired side pair. Top the engine's selection up to 4 named tribes,
+        // making sure at least two foot tribes are present so a valid same-class
+        // side pair always exists.
+        protected override void SetTribesToUse()
+        {
+            base.SetTribesToUse();
+            string[] foot = { "TRIBE_GAULS", "TRIBE_VANDALS", "TRIBE_DANES", "TRIBE_THRACIANS" };
+            string[] horse = { "TRIBE_SCYTHIANS", "TRIBE_NUMIDIANS" };
+            System.Func<string, bool> has = (n) =>
+            {
+                TribeType tt = infos.getType<TribeType>(n);
+                foreach (TribeType u in tribesToUse) if ((int)u == (int)tt) return true;
+                return false;
+            };
+            System.Action<string> add = (n) =>
+            {
+                TribeType tt = infos.getType<TribeType>(n);
+                if ((int)tt >= 0 && !has(n)) tribesToUse.Add(tt);
+            };
+            int footCount = 0;
+            foreach (string n in foot) if (has(n)) footCount++;
+            // ensure a pairable foot duo
+            for (int i = 0; i < foot.Length && footCount < 2; i++)
+                if (!has(foot[i])) { add(foot[i]); footCount++; }
+            // top up to 4 named tribes total
+            int guard = 0;
+            while (tribesToUse.Count < 4 && guard++ < 8)
+            {
+                string pick = (random.Next(3) == 0 && (!has(horse[0]) || !has(horse[1])))
+                    ? (has(horse[0]) ? horse[1] : horse[0])
+                    : foot[random.Next(foot.Length)];
+                if (!has(pick)) add(pick);
+            }
+        }
+
+        // Mountain-walled valley POCKETS (land with no entrance and no water
+        // access) get marked unreachable by the engine and render as dead fog
+        // mid-map. Pre-empt it: fill such pockets solid with mountains BEFORE
+        // the engine computes unreachable areas — they read as a massif instead.
+        protected override void SetUnreachableAreas()
+        {
+            SealPockets();
+            base.SetUnreachableAreas();
+        }
+        private void SealPockets()
+        {
+            int W = MapWidth, H = MapHeight, n = W * H;
+            int[] comp = new int[n];
+            for (int i = 0; i < n; i++) comp[i] = -1;
+            var sizes = new List<int>();
+            var hasSeaAccess = new List<bool>();
+            for (int i = 0; i < n; i++)
+            {
+                if (comp[i] >= 0) continue;
+                TileData t0 = GetTile(i);
+                if (t0.Terrain.Equals(WATER_TERRAIN) || t0.Height.Equals(MOUNTAIN_HEIGHT)
+                    || t0.Height.Equals(VOLCANO_HEIGHT)) continue;
+                int id = sizes.Count; sizes.Add(0); hasSeaAccess.Add(false);
+                var st = new Stack<int>(); st.Push(i);
+                while (st.Count > 0)
+                {
+                    int j = st.Pop();
+                    if (comp[j] >= 0) continue;
+                    TileData t = GetTile(j);
+                    if (t.Terrain.Equals(WATER_TERRAIN) || t.Height.Equals(MOUNTAIN_HEIGHT)
+                        || t.Height.Equals(VOLCANO_HEIGHT)) continue;
+                    comp[j] = id; sizes[id]++;
+                    int x = j % W, y = j / W;
+                    int[] dx, dy; Neigh(y, out dx, out dy);
+                    for (int k = 0; k < 6; k++)
+                    {
+                        int nx = x + dx[k], ny = y + dy[k];
+                        if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
+                        TileData nb = GetTile(nx, ny);
+                        if (nb.Terrain.Equals(WATER_TERRAIN))
+                        {
+                            if (!nb.Height.Equals(LAKE_HEIGHT)) hasSeaAccess[id] = true;
+                            continue;
+                        }
+                        if (comp[ny * W + nx] < 0) st.Push(ny * W + nx);
+                    }
+                }
+            }
+            int main = -1;
+            for (int id = 0; id < sizes.Count; id++)
+                if (main < 0 || sizes[id] > sizes[main]) main = id;
+            var hasSite = new bool[sizes.Count];
+            var isGorge = new bool[sizes.Count];
+            CitySiteType noSite = GetTile(0, 0).CitySite;
+            for (int i = 0; i < n; i++)
+            {
+                if (comp[i] < 0) continue;
+                if (!GetTile(i).CitySite.Equals(noSite)) hasSite[comp[i]] = true;
+                if (mGorge != null && mGorge[i]) isGorge[comp[i]] = true;   // the river's notch stays open
+            }
+            for (int i = 0; i < n; i++)
+            {
+                int id = comp[i];
+                if (id < 0 || id == main || hasSeaAccess[id] || hasSite[id] || isGorge[id]) continue;
+                TileData t = GetTile(i);                  // walled-in pocket → massif
+                t.Height = MOUNTAIN_HEIGHT;
+                t.Terrain = TEMPERATE_TERRAIN;
+            }
+        }
+
         // ---- the defining shape: lock it, then let the engine grow the rest ----
         protected override void GenerateLand()
         {
@@ -84,12 +191,14 @@ namespace OwMapCreation
             if (h.Equals(MOUNTAIN_HEIGHT) && mOurMountain != null) mOurMountain[t.ID] = true;
         }
         private bool[] mOurMountain;
+        private bool[] mGorge;
 
         private void LockCaldera()
         {
             int W = MapWidth, H = MapHeight;
             double cx = (W - 1) / 2.0;
             mOurMountain = new bool[W * H];
+            mGorge = new bool[W * H];
 
             // The SEA is on one edge (south or north, per gen); the mountains on
             // the opposite edge; the bay drains from the sea edge inland toward the
@@ -164,7 +273,11 @@ namespace OwMapCreation
                     if (d >= H - 3)
                     {
                         if (xs > W * 0.11) LockLand(t, MOUNTAIN_HEIGHT, TEMPERATE_TERRAIN);
-                        else LockLand(t, FLAT_HEIGHT, TEMPERATE_TERRAIN);   // the gorge pass
+                        else
+                        {
+                            LockLand(t, FLAT_HEIGHT, TEMPERATE_TERRAIN);    // the gorge pass
+                            if (mGorge != null) mGorge[t.ID] = true;        // exempt from pocket fill
+                        }
                         continue;
                     }
                     // flanking SPURS — wandering but CONTINUOUS mountain seed-lines:
@@ -305,6 +418,7 @@ namespace OwMapCreation
             TameVolcanoes();       // the engine scatters volcanoes through the ranges
             FlattenCoast();        // CoastalRainBasin walls the SEA edge with mountains
             TamePiedmont();        // …and sometimes builds a SECOND wall below our range
+            SealPockets();         // the demotions above can CREATE walled-in strips
             MirrorGameplay();      // enforce exact L–R symmetry of the gameplay layer
             RepairLakes();         // again: the mirror can copy a river-fed west lake
                                    // onto an east tile with no river (riverless pond)
@@ -835,6 +949,17 @@ namespace OwMapCreation
             }
             for (int i = 0; i < wsites.Count; i++)
                 if (i != capIdx && i != freeIdx && role[i] == null) { role[i] = west; kind[i] = 2; }
+
+            // The GAME honours roughly 2 settlements per tribe-in-use and strips
+            // the rest back to barbarian territory (verified from a turn-1 save:
+            // 3 tribes in use → exactly 6 named sites survived of our 8). Keep
+            // our named-site count within that budget — shed side sites first.
+            int named = 2;                                       // highland + island
+            for (int i = 0; i < wsites.Count; i++)
+                if (kind[i] == 2 || kind[i] == 3) named += 2;    // site + its mirror
+            int budget = 2 * (tribesToUse != null ? tribesToUse.Count : 4);
+            for (int i = wsites.Count - 1; i >= 0 && named > budget; i--)
+                if (kind[i] == 2) { role[i] = barbs; kind[i] = 1; named -= 2; }
 
             // apply + mirror EXACTLY (same role; side tribe west↔east)
             for (int i = 0; i < wsites.Count; i++)

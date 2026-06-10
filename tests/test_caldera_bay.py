@@ -480,6 +480,46 @@ class CalderaBaySweep(unittest.TestCase):
                          if _t(tiles[yy * w + x], "Height") == "HEIGHT_MOUNTAIN")
                 if wm == 0 or em == 0:
                     problems.append(f"{name}: spur gap in piedmont row d={dd}")
+            # no walled-in pockets: every passable land region either touches
+            # sea water or is the main landmass (fog-blob prevention)
+            compid = {}
+            comps = []
+            for i, t in enumerate(tiles):
+                xx, yy = i % w, i // w
+                if (xx, yy) in compid or _t(t, "Terrain") == "TERRAIN_WATER"                         or _t(t, "Height") in ("HEIGHT_MOUNTAIN", "HEIGHT_VOLCANO"):
+                    continue
+                comp, sea, stack = 0, False, [(xx, yy)]
+                while stack:
+                    cx, cy = stack.pop()
+                    if (cx, cy) in compid or not (0 <= cx < w and 0 <= cy < h):
+                        continue
+                    e = tiles[cy * w + cx]
+                    if _t(e, "Terrain") == "TERRAIN_WATER":
+                        if _t(e, "Height") != "HEIGHT_LAKE":
+                            sea = True
+                        continue
+                    if _t(e, "Height") in ("HEIGHT_MOUNTAIN", "HEIGHT_VOLCANO"):
+                        continue
+                    compid[(cx, cy)] = len(comps)
+                    comp += 1
+                    stack.extend(neighbors(cx, cy))
+                if comp:
+                    comps.append((comp, sea))
+            if comps:
+                mainc = max(range(len(comps)), key=lambda i: comps[i][0])
+                for i, (sz, sea) in enumerate(comps):
+                    if i != mainc and not sea:
+                        problems.append(f"{name}: walled-in land pocket ({sz} tiles)")
+            # sides must hold DIFFERENT tribes (4 tribes are forced in use now)
+            sw, se, ce = set(), set(), set()
+            for i, t in enumerate(tiles):
+                tr = _t(t, "TribeSite")
+                if not tr or "BARB" in tr:
+                    continue
+                xx = i % w
+                (sw if xx < c else se if xx > c else ce).add(tr)
+            if (sw - ce) == (se - ce):
+                problems.append(f"{name}: same side tribe both sides {sw - ce}")
             # no ghost urban: every urban tile belongs to a site within 2
             site_xy = [(i % w, i // w) for i, t in enumerate(tiles)
                        if t.find("CitySite") is not None]
