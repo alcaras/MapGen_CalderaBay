@@ -383,7 +383,7 @@ class CalderaBaySweep(unittest.TestCase):
                 d = y if south else h - 1 - y
                 row_mtn = sum(1 for x in range(w)
                               if _t(tiles[y * w + x], "Height") == "HEIGHT_MOUNTAIN")
-                if h - 9 <= d < h - 3 and row_mtn > w * 0.3:
+                if h - 13 <= d < h - 3 and row_mtn > w * 0.3:
                     problems.append(f"{name}: second wall ({row_mtn} mtns at d={d})")
                 if d >= h - 8:
                     row_sites = sum(1 for x in range(w)

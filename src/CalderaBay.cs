@@ -98,8 +98,9 @@ namespace OwMapCreation
         // the engine computes unreachable areas — they read as a massif instead.
         protected override void SetUnreachableAreas()
         {
-            SealPockets();
-            base.SetUnreachableAreas();
+            TamePiedmont();        // open the engine's second wall FIRST…
+            SealPockets();         // …then fill whatever stays sealed…
+            base.SetUnreachableAreas();   // …so the fog marking sees final passability
         }
         private void SealPockets()
         {
@@ -205,9 +206,13 @@ namespace OwMapCreation
             // range. `d` = rows from the sea edge, so the same logic works flipped.
             mSeaSouth = random.Next(2) == 0;
             int seaBand = 6 + random.Next(3);                // base sea depth, 6–8 (always ≥5)
-            int nSpurs = 1 + random.Next(2);                 // 1–2 spurs per side
+            // exactly ONE spur per side, framing the central corridor: the bay,
+            // the island, the highland prize and both forward sites all sit
+            // BETWEEN the mirrored spurs.
+            int nSpurs = 1;
             double[] spurOff = new double[nSpurs];
-            for (int i = 0; i < nSpurs; i++) spurOff[i] = 0.16 + 0.22 * (random.Next(100) / 100.0);
+            spurOff[0] = 0.20 + 0.06 * (random.Next(100) / 100.0);   // 0.20–0.26 of W from centre
+            mSpurOffFrac = spurOff[0];
 
             // WOBBLED COASTLINE: the locked sea band's depth varies per column (a
             // smooth, mirror-symmetric random walk from the centre outward), so the
@@ -289,7 +294,7 @@ namespace OwMapCreation
                     // survives there).
                     bool onSpur = false;
                     for (int i = 0; i < nSpurs && !onSpur; i++)
-                        if (Math.Abs(xs - spurAt[i][y]) < 0.9 && inf > 0.42) onSpur = true;
+                        if (Math.Abs(xs - spurAt[i][y]) < 1.1 && inf > 0.42) onSpur = true;   // ~2-3 wide: solid, not fat
                     if (onSpur) { LockLand(t, MOUNTAIN_HEIGHT, TEMPERATE_TERRAIN); continue; }
 
                     if (d >= H - 7)
@@ -324,6 +329,7 @@ namespace OwMapCreation
                 }
         }
         private bool mSeaSouth;
+        private double mSpurOffFrac;
         private int mIslandX, mIslandY;
         private double mIslandR;
 
@@ -417,8 +423,7 @@ namespace OwMapCreation
             RepairLakes();         // no lake chains along the range, no tarns walled in rock
             TameVolcanoes();       // the engine scatters volcanoes through the ranges
             FlattenCoast();        // CoastalRainBasin walls the SEA edge with mountains
-            TamePiedmont();        // …and sometimes builds a SECOND wall below our range
-            SealPockets();         // the demotions above can CREATE walled-in strips
+            SealPockets();         // late safety: small strips sealed by the mirror
             MirrorGameplay();      // enforce exact L–R symmetry of the gameplay layer
             RepairLakes();         // again: the mirror can copy a river-fed west lake
                                    // onto an east tile with no river (riverless pond)
@@ -558,6 +563,45 @@ namespace OwMapCreation
         private void RepairLakes()
         {
             int W = MapWidth, H = MapHeight;
+
+            // PROTECTED lakes: for every river system whose only water contact is
+            // a lake, that lake must survive — culling it orphans the river.
+            bool[] protectedLake = new bool[W * H];
+            bool[] visited = new bool[W * H];
+            for (int i0 = 0; i0 < W * H; i0++)
+            {
+                if (visited[i0] || !IsRiver(GetTile(i0))) continue;
+                var comp = new List<int>();
+                var st = new Stack<int>(); st.Push(i0);
+                while (st.Count > 0)
+                {
+                    int j = st.Pop();
+                    if (j < 0 || j >= W * H || visited[j] || !IsRiver(GetTile(j))) continue;
+                    visited[j] = true; comp.Add(j);
+                    int jx = j % W, jy = j / W; int[] ddx, ddy; Neigh(jy, out ddx, out ddy);
+                    for (int k = 0; k < 6; k++)
+                    {
+                        int nx = jx + ddx[k], ny = jy + ddy[k];
+                        if (nx >= 0 && nx < W && ny >= 0 && ny < H) st.Push(ny * W + nx);
+                    }
+                }
+                bool seaContact = false;
+                var lakeContacts = new List<int>();
+                foreach (int j in comp)
+                {
+                    int jx = j % W, jy = j / W; int[] ddx, ddy; Neigh(jy, out ddx, out ddy);
+                    for (int k = 0; k < 6; k++)
+                    {
+                        int nx = jx + ddx[k], ny = jy + ddy[k];
+                        if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
+                        TileData nb = GetTile(nx, ny);
+                        if (nb.Height.Equals(LAKE_HEIGHT)) lakeContacts.Add(ny * W + nx);
+                        else if (nb.Terrain.Equals(WATER_TERRAIN)) seaContact = true;
+                    }
+                }
+                if (!seaContact) foreach (int li in lakeContacts) protectedLake[li] = true;
+            }
+
             for (int y = 0; y < H; y++)
                 for (int x = 0; x < W; x++)
                 {
@@ -566,10 +610,7 @@ namespace OwMapCreation
                     int d = mSeaSouth ? y : (H - 1 - y);              // rows from the sea edge
                     bool inRangeZone = d > 0.72 * (H - 1);
                     int[] dx, dy; Neigh(y, out dx, out dy);
-                    // fed = a river actually TOUCHES this lake tile (that's what
-                    // keeps the river un-orphaned); a river merely nearby doesn't
-                    // justify a pond in the mountains.
-                    bool riverFed = IsRiver(t);
+                    bool riverFed = IsRiver(t) || protectedLake[y * W + x];
                     // Cull artifact ponds: not fed by any river AND (deep in the
                     // range zone OR cut off by the map border). River-fed tiles
                     // always survive — culling them would orphan the river; this
@@ -595,18 +636,20 @@ namespace OwMapCreation
                 }
         }
 
-        // The engine sometimes grows a SECOND mountain wall a few rows in front of
-        // our locked range, creating a walled-off plateau shelf between the two
-        // (which then even collects city sites). Demote unlocked mountains in the
-        // piedmont band to hills — foothills, not a second wall. Our own locked
-        // tiles (the range and the spur seeds crossing the band) are untouched.
+
+        // The engine sometimes grows a SECOND mountain wall a few rows in front
+        // of our locked range. The shelf between the walls is large (100+ tiles)
+        // and gathers city sites, so it can't be filled with mountains — it has
+        // to be OPENED: demote the engine's unlocked mountains in the piedmont
+        // band to hills (our own locked walls are untouched). Removing this pass
+        // was tried and immediately failed the pocket sweep.
         private void TamePiedmont()
         {
             int W = MapWidth, H = MapHeight;
             for (int y = 0; y < H; y++)
             {
                 int d = mSeaSouth ? y : (H - 1 - y);          // rows from the sea edge
-                if (d < H - 9 || d >= H - 3) continue;        // the band below the range
+                if (d < H - 13 || d >= H - 3) continue;       // the band below the range
                 for (int x = 0; x < W; x++)
                 {
                     TileData t = GetTile(x, y);
@@ -804,6 +847,28 @@ namespace OwMapCreation
                 GetTile(sites[worst][0], sites[worst][1]).CitySite = none;
                 sites.RemoveAt(worst);
             }
+
+            // PAD up to 6 per side if short — at the FULL engine distance (8) from
+            // everything including mirrors and prizes; never cramming below it.
+            for (int y = 2; y < H - 2 && sites.Count < 6; y++)
+                for (int x = 3; x <= W / 2 - 3 && sites.Count < 6; x++)
+                {
+                    if (OnIsland(x, y) || !Foundable(x, y, none)) continue;
+                    int mx = (y % 2 == 0) ? (W - 1 - x) : (W - x);
+                    bool ok = true;
+                    foreach (var sxy in sites)
+                    {
+                        int smx = (sxy[1] % 2 == 0) ? (W - 1 - sxy[0]) : (W - sxy[0]);
+                        if (TileDist(x, y, sxy[0], sxy[1]) < SITE_SPACE
+                            || TileDist(mx, y, smx, sxy[1]) < SITE_SPACE) { ok = false; break; }
+                    }
+                    if (ok) foreach (var a in avoid)
+                        if (TileDist(x, y, a[0], a[1]) < SITE_SPACE
+                            || TileDist(mx, y, a[0], a[1]) < SITE_SPACE) { ok = false; break; }
+                    if (!ok) continue;
+                    GetTile(x, y).CitySite = sample;
+                    sites.Add(new[] { x, y });
+                }
         }
 
         // enforce exact L–R symmetry of terrain/resources (NOT sites/tribes —
@@ -939,12 +1004,22 @@ namespace OwMapCreation
                 if (i != capIdx && i != freeIdx && role[i] == null) remaining++;
             if (remaining >= 3)
             {
+                // the central tribe's forward site sits INSIDE the corridor
+                // between the spurs whenever a site exists there
+                double corridor = c - mSpurOffFrac * W;     // west spur's x position
                 int pick = -1, bestX = -1;
                 for (int i = 0; i < wsites.Count; i++)
                 {
                     if (i == capIdx || i == freeIdx || role[i] != null) continue;
+                    if (wsites[i][0] <= corridor) continue;  // outside the spur frame
                     if (wsites[i][0] > bestX) { bestX = wsites[i][0]; pick = i; }
                 }
+                if (pick < 0)
+                    for (int i = 0; i < wsites.Count; i++)   // fallback: closest to seam
+                    {
+                        if (i == capIdx || i == freeIdx || role[i] != null) continue;
+                        if (wsites[i][0] > bestX) { bestX = wsites[i][0]; pick = i; }
+                    }
                 if (pick >= 0) { role[pick] = centre; kind[pick] = 3; }
             }
             for (int i = 0; i < wsites.Count; i++)
