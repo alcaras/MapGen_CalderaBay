@@ -773,15 +773,16 @@ namespace OwMapCreation
 
             TribeType barbs = infos.getType<TribeType>("TRIBE_BARBARIANS");
 
-            // the centre tribe garrisons the highland prize city; barbarians
-            // guard the island prize (the third barb camp)
+            // The CENTRAL tribe holds the contested middle kingdom: the highland
+            // prize, the island prize, and (when a side has 7+ sites) one forward
+            // site per side. Layout per side, MIRRORED EXACTLY: capital (free) +
+            // its nearest site (free) + 2 barbarian camps (most coastal) + 1
+            // central-tribe forward site (closest to the centre seam) + the rest
+            // held by that side's tribe. Net on a 16-site map: 2 start, 2 free,
+            // 4 barb, 4 central, 2+2 side tribes.
             if (mCentreSiteId >= 0) GetTile(mCentreSiteId).TribeSite = centre;
-            if (mIslandSiteId >= 0) GetTile(mIslandSiteId).TribeSite = barbs;
+            if (mIslandSiteId >= 0) GetTile(mIslandSiteId).TribeSite = centre;
 
-            // Per side: the CAPITAL (west-most site, where the start lands) and
-            // its NEAREST site stay FREE (start + first expansion); the most
-            // coastal of the rest is a BARBARIAN camp; every other site is held
-            // by the side's TRIBE. The east half mirrors the west exactly.
             CitySiteType noSite = GetTile(0, 0).CitySite;
             var wsites = new List<int[]>();
             for (int y = 0; y < H; y++)
@@ -789,6 +790,9 @@ namespace OwMapCreation
                     if (!GetTile(x, y).CitySite.Equals(noSite) && !OnIsland(x, y))
                         wsites.Add(new[] { x, y });
             if (wsites.Count == 0) return;
+
+            var role = new TribeType?[wsites.Count];   // null = free
+            var kind = new int[wsites.Count];          // 0=free 1=barb 2=side 3=central
 
             int capIdx = 0;
             for (int i = 1; i < wsites.Count; i++)
@@ -800,19 +804,45 @@ namespace OwMapCreation
                 double d = TileDist(wsites[i][0], wsites[i][1], wsites[capIdx][0], wsites[capIdx][1]);
                 if (d < bestFree) { bestFree = d; freeIdx = i; }
             }
-            int barbIdx = -1; int bestSea = int.MaxValue;
-            for (int i = 0; i < wsites.Count; i++)
+
+            // two barb camps: the most coastal of the remaining sites
+            for (int b = 0; b < 2; b++)
             {
-                if (i == capIdx || i == freeIdx) continue;
-                int dSea = mSeaSouth ? wsites[i][1] : (H - 1 - wsites[i][1]);
-                if (dSea < bestSea) { bestSea = dSea; barbIdx = i; }
+                int pick = -1, bestSea = int.MaxValue;
+                for (int i = 0; i < wsites.Count; i++)
+                {
+                    if (i == capIdx || i == freeIdx || role[i] != null) continue;
+                    int dSea = mSeaSouth ? wsites[i][1] : (H - 1 - wsites[i][1]);
+                    if (dSea < bestSea) { bestSea = dSea; pick = i; }
+                }
+                if (pick >= 0) { role[pick] = barbs; kind[pick] = 1; }
+            }
+
+            // count what's left for tribes; with 3+ left, the central tribe takes
+            // the FORWARD site (closest to the centre seam), the side tribe the rest
+            int remaining = 0;
+            for (int i = 0; i < wsites.Count; i++)
+                if (i != capIdx && i != freeIdx && role[i] == null) remaining++;
+            if (remaining >= 3)
+            {
+                int pick = -1, bestX = -1;
+                for (int i = 0; i < wsites.Count; i++)
+                {
+                    if (i == capIdx || i == freeIdx || role[i] != null) continue;
+                    if (wsites[i][0] > bestX) { bestX = wsites[i][0]; pick = i; }
+                }
+                if (pick >= 0) { role[pick] = centre; kind[pick] = 3; }
             }
             for (int i = 0; i < wsites.Count; i++)
+                if (i != capIdx && i != freeIdx && role[i] == null) { role[i] = west; kind[i] = 2; }
+
+            // apply + mirror EXACTLY (same role; side tribe west↔east)
+            for (int i = 0; i < wsites.Count; i++)
             {
-                if (i == capIdx || i == freeIdx) continue;
+                if (role[i] == null) continue;
                 int bx = wsites[i][0], by = wsites[i][1];
-                TribeType who = (i == barbIdx) ? barbs : west;
-                TribeType whoEast = (i == barbIdx) ? barbs : east;
+                TribeType who = role[i].Value;
+                TribeType whoEast = (kind[i] == 2) ? east : who;   // only SIDE sites flip tribes
                 GetTile(bx, by).TribeSite = who;
                 int mxx = (by % 2 == 0) ? (W - 1 - bx) : (W - bx);
                 if (mxx > c && mxx < W && !GetTile(mxx, by).CitySite.Equals(noSite))

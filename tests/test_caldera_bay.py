@@ -253,10 +253,11 @@ class CalderaBayMap(unittest.TestCase):
                 continue
             x = i % self.w
             (west if x < c else east if x > c else centre).append(tr)
-        wnamed = set(s for s in west if "BARBARIAN" not in s)
-        enamed = set(s for s in east if "BARBARIAN" not in s)
-        self.assertEqual(len(wnamed), 1, f"one named tribe west, got {wnamed}")
-        self.assertEqual(len(enamed), 1, f"one named tribe east, got {enamed}")
+        cnamed = set(s for s in centre if "BARBARIAN" not in s)
+        wnamed = set(s for s in west if "BARBARIAN" not in s) - cnamed
+        enamed = set(s for s in east if "BARBARIAN" not in s) - cnamed
+        self.assertLessEqual(len(wnamed), 1, f"one side tribe west, got {wnamed}")
+        self.assertLessEqual(len(enamed), 1, f"one side tribe east, got {enamed}")
         for s in wnamed | enamed:
             self.assertFalse(any(b in s for b in ("RAIDER", "REBEL", "ANARCHY")),
                              f"player tribe must be a real tribe, not {s}")
@@ -463,8 +464,8 @@ class CalderaBaySweep(unittest.TestCase):
                     n_barb += 1
                 else:
                     n_tribe += 1
-            if not (2 <= n_barb <= 3):
-                problems.append(f"{name}: {n_barb} barb camps (want 2-3)")
+            if n_barb != 4:
+                problems.append(f"{name}: {n_barb} barb camps (want 4 — 2 per side)")
             if n_tribe < 5:
                 problems.append(f"{name}: only {n_tribe} tribe-held sites")
             if n_free < 4:
