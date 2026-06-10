@@ -306,6 +306,8 @@ namespace OwMapCreation
                                    // onto an east tile with no river (riverless pond)
             SetIslandCaldera();    // the ONE volcano — after the mirror (a self-mirror tile)
             FinalizeSites();       // authoritative 14–18 sites at distance 8
+            AssignTribes();        // tribes live ON final city sites (else: barbs in-game)
+            CleanGhostUrban();     // trimmed sites must not leave ghost urban rings
             RichenPrizes();        // floor on prize richness if the engine rolled stingy
             base.AddMapElementNames();   // names go on the FINAL terrain
         }
@@ -520,6 +522,7 @@ namespace OwMapCreation
                 {
                     TileData t = GetTile(x, y);
                     if (!t.Height.Equals(MOUNTAIN_HEIGHT)) continue;
+                    if (mOurMountain != null && mOurMountain[t.ID]) continue;   // never melt OUR walls
                     int d = mSeaSouth ? y : (H - 1 - y);     // rows from the sea edge
                     bool coastal = d < thresh;               // the seaward third…
                     if (!coastal)                            // …and any shoreline (incl. bay shores)
@@ -574,8 +577,10 @@ namespace OwMapCreation
             for (int y = 0; y < H; y++)
             {
                 if ((y % 2) == 0) continue;
-                if (!GetTile(x, y).CitySite.Equals(none) && !OnIsland(x, y))
-                { mCentreSiteId = y * W + x; return; }
+                if (GetTile(x, y).CitySite.Equals(none) || OnIsland(x, y)) continue;
+                int dHere = mSeaSouth ? y : (H - 1 - y);
+                if (dHere < 0.55 * (H - 1)) continue;   // a coastal centre site is NOT the highland prize
+                mCentreSiteId = y * W + x; return;
             }
             int dir = mSeaSouth ? -1 : 1;            // scan from the range toward the sea
             int startY = mSeaSouth ? (H - 5) : 4;
@@ -704,97 +709,124 @@ namespace OwMapCreation
         // put in use this game are valid — a site of any other tribe degrades to
         // plain barbarians in-game. So the pool is exactly the distinct tribes
         // base.PlaceTribes() rolled, never a hardcoded list.
+        // PlaceTribes here only HARVESTS what the engine rolled (the game's
+        // tribes-in-use) and clears the board. The actual assignment happens at
+        // the end of Build (AssignTribes), because in Old World tribal
+        // settlements live ON CITY SITES — the engine sets TribeSite on site
+        // tiles — and our sites aren't final until FinalizeSites has run.
+        // (Tribe markers on non-site tiles degrade to plain barbarians in-game,
+        // which is exactly the "only barbs" bug.)
         protected override void PlaceTribes()
         {
             base.PlaceTribes();
             int W = MapWidth, H = MapHeight;
             TribeType none = GetTile(0, 0).TribeSite;
-            CitySiteType noSite = GetTile(0, 0).CitySite;
             TribeType huns = infos.getType<TribeType>("TRIBE_HUNS");
-
-            // the engine's rolled NAMED tribes = the game's tribes-in-use (the
-            // generic barbarian/raider/rebel camps don't count as tribes)
             int barb = (int)infos.getType<TribeType>("TRIBE_BARBARIANS");
             int raid = (int)infos.getType<TribeType>("TRIBE_RAIDERS");
             int rebl = (int)infos.getType<TribeType>("TRIBE_REBELS");
-            bool hunsRolled = false;
-            var pool = new List<TribeType>();
+            mHunsRolled = false;
+            mTribePool = new List<TribeType>();
             for (int i = 0; i < W * H; i++)
             {
                 TribeType tb = GetTile(i).TribeSite;
                 if (tb.Equals(none)) continue;
-                if ((int)tb == (int)huns) { hunsRolled = true; continue; }
+                if ((int)tb == (int)huns) { mHunsRolled = true; continue; }
                 if ((int)tb == barb || (int)tb == raid || (int)tb == rebl) continue;
                 bool seen = false;
-                foreach (TribeType p in pool) if ((int)p == (int)tb) { seen = true; break; }
-                if (!seen) pool.Add(tb);
+                foreach (TribeType p in mTribePool) if ((int)p == (int)tb) { seen = true; break; }
+                if (!seen) mTribePool.Add(tb);
             }
-            if (pool.Count == 0 && hunsRolled) pool.Add(huns); // huns-only game: still tribes
-            if (pool.Count == 0) return;   // tribes disabled — leave the engine's camps
+            if (mTribePool.Count == 0 && mHunsRolled) mTribePool.Add(huns);
+            if (mTribePool.Count == 0) return;   // tribes disabled — keep the engine's camps
+            for (int i = 0; i < W * H; i++)      // clear; AssignTribes re-places on final sites
+                if (!GetTile(i).TribeSite.Equals(none)) GetTile(i).TribeSite = none;
+        }
+        private List<TribeType> mTribePool;
+        private bool mHunsRolled;
 
-            // pick a side pair: DIFFERENT tribes in the same horse class if any
-            // such pair was rolled; otherwise the same tribe both sides (always
-            // valid, trivially horse-paired) — never a horse-vs-foot mismatch.
-            TribeType west = pool[0], east = pool[0];
+        // Assign the rolled tribes to FINAL city sites: one mid-board site per
+        // player side (a mirrored pair — different tribes, horse-paired), and the
+        // centre tribe (Huns when rolled) holding the contested HIGHLAND city.
+        private void AssignTribes()
+        {
+            if (mTribePool == null || mTribePool.Count == 0) return;
+            int W = MapWidth, H = MapHeight, c = W / 2;
+            TribeType none = GetTile(0, 0).TribeSite;
+            TribeType huns = infos.getType<TribeType>("TRIBE_HUNS");
+
+            // a DIFFERENT same-horse-class pair if one was rolled, else same both sides
+            TribeType west = mTribePool[0], east = mTribePool[0];
             bool found = false;
-            for (int i = 0; i < pool.Count && !found; i++)
-                for (int j = 0; j < pool.Count && !found; j++)
-                    if (i != j && IsHorseTribe(pool[i]) == IsHorseTribe(pool[j]))
-                    { west = pool[i]; east = pool[j]; found = true; }
-
-            // centre: Huns if the engine rolled them, else a third rolled tribe,
-            // else reuse the side tribe (still a valid in-use tribe).
+            for (int i = 0; i < mTribePool.Count && !found; i++)
+                for (int j = 0; j < mTribePool.Count && !found; j++)
+                    if (i != j && IsHorseTribe(mTribePool[i]) == IsHorseTribe(mTribePool[j]))
+                    { west = mTribePool[i]; east = mTribePool[j]; found = true; }
             TribeType centre = west;
-            if (hunsRolled) centre = huns;
-            else foreach (TribeType p in pool)
+            if (mHunsRolled) centre = huns;
+            else foreach (TribeType p in mTribePool)
                 if ((int)p != (int)west && (int)p != (int)east) { centre = p; break; }
 
-            for (int i = 0; i < W * H; i++)
-                if (!GetTile(i).TribeSite.Equals(none)) GetTile(i).TribeSite = none;
-            PlaceMirroredPair((int)(W * 0.24), H / 2 + 2, west, east, none, noSite);
-            PlaceCentreAxis((int)(H * 0.55), centre, none, noSite);
+            // the centre tribe garrisons the highland prize city
+            if (mCentreSiteId >= 0) GetTile(mCentreSiteId).TribeSite = centre;
+
+            // each side's tribe holds the site CLOSEST TO THE CENTRE of its half
+            // (the contested forward site) — never the capital-anchor (west-most)
+            // and never a prize. The east twin is the west site's exact mirror.
+            CitySiteType noSite = GetTile(0, 0).CitySite;
+            int bestId = -1; double bestD = 1e9;
+            int westmostX = W;
+            for (int y = 0; y < H; y++)
+                for (int x = 0; x < c; x++)
+                    if (!GetTile(x, y).CitySite.Equals(noSite) && !OnIsland(x, y))
+                        westmostX = Math.Min(westmostX, x);
+            for (int y = 0; y < H; y++)
+                for (int x = 0; x < c; x++)
+                {
+                    if (GetTile(x, y).CitySite.Equals(noSite) || OnIsland(x, y)) continue;
+                    if (x <= westmostX) continue;            // leave the capital area free
+                    double d = c - x;                        // smaller = closer to the centre seam
+                    if (d < bestD) { bestD = d; bestId = y * W + x; }
+                }
+            if (bestId >= 0)
+            {
+                int bx = bestId % W, by = bestId / W;
+                GetTile(bx, by).TribeSite = west;
+                int mxx = (by % 2 == 0) ? (W - 1 - bx) : (W - bx);
+                if (mxx > c && mxx < W && !GetTile(mxx, by).CitySite.Equals(noSite))
+                    GetTile(mxx, by).TribeSite = east;
+            }
         }
+
+        // Urban founding tiles belong to a city site; when FinalizeSites trims a
+        // site, its urban ring must go too or it lingers as a ghost town.
+        private void CleanGhostUrban()
+        {
+            int W = MapWidth, H = MapHeight;
+            CitySiteType none = GetTile(0, 0).CitySite;
+            for (int y = 0; y < H; y++)
+                for (int x = 0; x < W; x++)
+                {
+                    TileData t = GetTile(x, y);
+                    if (!t.Terrain.Equals(URBAN_TERRAIN)) continue;
+                    bool near = false;
+                    for (int dy = -2; dy <= 2 && !near; dy++)
+                        for (int dx = -2; dx <= 2 && !near; dx++)
+                        {
+                            int nx = x + dx, ny = y + dy;
+                            if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
+                            if (TileDist(x, y, nx, ny) > 2) continue;
+                            if (!GetTile(nx, ny).CitySite.Equals(none)) near = true;
+                        }
+                    if (!near) t.Terrain = TEMPERATE_TERRAIN;   // ghost town → plain land
+                }
+        }
+
         private bool IsHorseTribe(TribeType t)
         {
             int scy = (int)infos.getType<TribeType>("TRIBE_SCYTHIANS");
             int num = (int)infos.getType<TribeType>("TRIBE_NUMIDIANS");
             return (int)t == scy || (int)t == num;
-        }
-        private bool EligibleTribe(TileData t, TribeType none, CitySiteType noSite)
-        {
-            if (t.Terrain.Equals(WATER_TERRAIN)) return false;
-            if (t.Height.Equals(MOUNTAIN_HEIGHT) || t.Height.Equals(VOLCANO_HEIGHT)) return false;
-            if (!t.CitySite.Equals(noSite)) return false;
-            return t.TribeSite.Equals(none);
-        }
-        private void PlaceMirroredPair(int sx, int sy, TribeType west, TribeType east, TribeType none, CitySiteType noSite)
-        {
-            int W = MapWidth, H = MapHeight;
-            for (int rad = 0; rad < 12; rad++)
-                for (int dy = -rad; dy <= rad; dy++)
-                    for (int dx = -rad; dx <= rad; dx++)
-                    {
-                        int x = sx + dx, y = sy + dy;
-                        if (x < 0 || x >= W || y < 0 || y >= H || x >= W / 2) continue;
-                        int mxx = (y % 2 == 0) ? (W - 1 - x) : (W - x);
-                        if (mxx < 0 || mxx >= W) continue;
-                        TileData t = GetTile(x, y), m = GetTile(mxx, y);
-                        if (!EligibleTribe(t, none, noSite) || !EligibleTribe(m, none, noSite)) continue;
-                        t.TribeSite = west; m.TribeSite = east; return;
-                    }
-        }
-        private void PlaceCentreAxis(int sy, TribeType tribe, TribeType none, CitySiteType noSite)
-        {
-            int W = MapWidth, H = MapHeight, x = W / 2;
-            for (int rad = 0; rad < 14; rad++)
-                for (int s = -1; s <= 1; s += 2)
-                {
-                    int y = sy + rad * s;
-                    if (y < 0 || y >= H || (y % 2) == 0) continue;
-                    TileData t = GetTile(x, y);
-                    if (!EligibleTribe(t, none, noSite)) continue;
-                    t.TribeSite = tribe; return;
-                }
         }
     }
 }

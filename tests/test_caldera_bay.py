@@ -436,13 +436,26 @@ class CalderaBaySweep(unittest.TestCase):
                            and hexdist((i % w, i // w), hp) <= 4)
                 if near < 3:
                     problems.append(f"{name}: highland prize has {near} resources")
-            # player-side tribes must be NAMED tribes, never barb-type camps
+            # player-side tribes must be NAMED tribes, never barb-type camps —
+            # and every tribe marker must sit ON a city site (tribal settlements
+            # are city sites in Old World; markers elsewhere degrade to barbs)
             for i, t in enumerate(tiles):
                 tr = _t(t, "TribeSite")
-                if not tr or i % w == c:
+                if not tr:
                     continue
-                if any(b in tr for b in NON_DIPLO):
+                if t.find("CitySite") is None:
+                    problems.append(f"{name}: tribe {tr} not on a city site")
+                if i % w != c and any(b in tr for b in NON_DIPLO):
                     problems.append(f"{name}: {tr} on a player side")
+            # no ghost urban: every urban tile belongs to a site within 2
+            site_xy = [(i % w, i // w) for i, t in enumerate(tiles)
+                       if t.find("CitySite") is not None]
+            for i, t in enumerate(tiles):
+                if _t(t, "Terrain") != "TERRAIN_URBAN":
+                    continue
+                xy = (i % w, i // w)
+                if not any(hexdist(xy, s) <= 2 for s in site_xy):
+                    problems.append(f"{name}: ghost urban at {xy}")
         self.assertEqual(problems, [], "structure problems:\n" + "\n".join(problems))
 
 
