@@ -857,9 +857,11 @@ namespace OwMapCreation
         {
             int x = TileX(tile), y = TileY(tile);
             if (OnIsland(x, y) || InsideSpurFrame(x, y)) return false;
-            // start ON an existing city site — otherwise start placement
-            // invents an extra site, inflating the free-site count per side
-            if (tile.CitySite.Equals(GetTile(0, 0).CitySite)) return false;
+            // NEVER require an existing city site here: the base check itself
+            // calls IsValidCitySite, which REJECTS occupied site tiles — the
+            // two conditions are mutually exclusive, so requiring a site made
+            // every tile invalid and the whole map failed to generate in-game
+            // (owmapgen's start path doesn't consult this hook, hiding it).
             return base.IsValidPlayerStart(tile, player, minTeamStartDistance);
         }
         // the corridor between the mirrored spurs is reserved for the TWO
