@@ -75,7 +75,7 @@ class CalderaBayMap(unittest.TestCase):
         subprocess.run(
             [str(OW), "--mod", str(ROOT / "mod"), "--script", "CalderaBay",
              "--size", "smallest", "--players", "2", "--seed", "1",
-             "--aspect-ratio", "wide", "--mirror", "--output", str(OUT)],
+             "--mirror", "--output", str(OUT)],
             cwd=ROOT, capture_output=True, text=True)
         xmls = sorted(OUT.glob("*.xml"))
         if not xmls:
@@ -290,7 +290,7 @@ class CalderaBaySweep(unittest.TestCase):
                 subprocess.run(
                     [str(OW), "--mod", str(ROOT / "mod"), "--script", "CalderaBay",
                      "--size", "smallest", "--players", "2", "--seed", str(seed),
-                     "--aspect-ratio", "wide", "--mirror",
+                     "--mirror",
                      "--map-option", f"MAP_OPTIONS_MULTI_CALDERA_CLIMATE={opt}",
                      "--output", str(out)], cwd=ROOT, capture_output=True)
                 xmls = sorted(out.glob("*.xml"))
@@ -642,6 +642,67 @@ class CalderaBaySweep(unittest.TestCase):
                         f"{name}: capital {sxy} boxed in "
                         f"({mtns}/{len(area)} mountain)")
         self.assertEqual(problems, [], "structure problems:\n" + "\n".join(problems))
+
+
+class CalderaBayConfigs(unittest.TestCase):
+    """The map must ADAPT to any size x aspect x symmetry the host picks:
+    knobs derive from the final W/H, and Point Symmetry is coerced to the
+    centerline mirror (the design is left-right symmetric by nature)."""
+    CONFIGS = [
+        ("wide duel", ["--size", "smallest", "--mirror", "--aspect-ratio", "wide"]),
+        ("ultrawide duel", ["--size", "smallest", "--mirror", "--aspect-ratio", "ultrawide"]),
+        ("tiny square", ["--size", "tiny", "--mirror"]),
+        ("point-sym duel", ["--size", "smallest", "--point-symmetry"]),
+    ]
+
+    def test_configs(self):
+        import os
+        problems = []
+        for name, args in self.CONFIGS:
+            out = OUT / ("cfg_" + name.replace(" ", "_"))
+            out.mkdir(exist_ok=True)
+            for f in out.glob("*.xml"):
+                f.unlink()
+            subprocess.run(
+                [str(OW), "--mod", str(ROOT / "mod"), "--script", "CalderaBay",
+                 "--players", "2", "--seed", "4", "--output", str(out)] + args,
+                cwd=ROOT, capture_output=True, text=True)
+            xmls = sorted(out.glob("*.xml"))
+            if not xmls:
+                problems.append(f"{name}: no map generated")
+                continue
+            root = ET.parse(xmls[0]).getroot()
+            w = int(root.attrib["MapWidth"])
+            tiles = root.findall("Tile")
+            h = len(tiles) // w
+
+            def wat(x, y):
+                return _t(tiles[y * w + x], "Terrain") == "TERRAIN_WATER"
+            sw = sum(wat(x, 0) for x in range(w))
+            nw = sum(wat(x, h - 1) for x in range(w))
+            if min(sw, nw) >= w * 0.3:
+                problems.append(f"{name}: second sea")
+            if max(sw, nw) < w * 0.7:
+                problems.append(f"{name}: no sea edge")
+            volc = sum(1 for t in tiles if _t(t, "Height") == "HEIGHT_VOLCANO")
+            if volc != 1:
+                problems.append(f"{name}: {volc} volcanoes")
+            sites = sum(1 for t in tiles if t.find("CitySite") is not None)
+            if sites < 10:
+                problems.append(f"{name}: only {sites} sites")
+            # the mirror must hold in EVERY config (incl. coerced point-sym)
+            mis = 0
+            for y in range(h):
+                for x in range(w // 2):
+                    mx = mirror_x(x, y, w)
+                    if mx >= w:
+                        continue
+                    if (_t(tiles[y * w + x], "Terrain")
+                            != _t(tiles[y * w + mx], "Terrain")):
+                        mis += 1
+            if mis > 14:
+                problems.append(f"{name}: {mis} mirror mismatches")
+        self.assertEqual(problems, [], "config problems:\n" + "\n".join(problems))
 
 
 if __name__ == "__main__":

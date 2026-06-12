@@ -16,8 +16,12 @@ lanes and passes. The estuary floodplain is a **marsh-or-desert moat** ringing t
 contested middle. A **volcanic island** sits in the bay as a neutral prize, and a
 **mountain city** in the highlands is a second prize to fight over.
 
-It is always generated at its own **wide duel size (64×43) · mirror** — a fair 1v1: everything west of
-centre is mirrored east, so neither player has a terrain or resource edge.
+It adapts to **any size and aspect ratio** you pick — Duel through Huge,
+Square / Wide / Ultrawide — every knob (sea depth, range depth, site count,
+spur placement) derives from the final map dimensions. Mirror symmetry is
+enforced: everything west of centre is mirrored east, so neither player has a
+terrain or resource edge. (Point Symmetry is coerced to the centerline
+mirror — the estuary design is left-right symmetric by nature.)
 
 ### Designed-in features
 

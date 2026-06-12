@@ -26,13 +26,11 @@ namespace OwMapCreation
         // (at the normal min distance) land at 14–18.
         protected override void SetMapSize()
         {
-            base.SetMapSize();
-            mapParameters.iWidth = 46;
-            mapParameters.iHeight = 44;     // the STANDARD duel canvas (2025
-                                            // tiles, same as CoastalRainBasin /
-                                            // InlandSea at Duel size) — sites
-                                            // pack near the engine's 8-tile
-                                            // floor, nothing rattles around
+            base.SetMapSize();              // honour the CHOSEN size and aspect
+                                            // ratio (Duel 46x44 sq / 58x34 wide /
+                                            // 72x28 ultrawide, Tiny 58x58, ...)
+            if ((mapParameters.iWidth & 1) == 1)
+                mapParameters.iWidth--;     // the stagger mirror needs even W
         }
 
         // ---- Climate (latitude) map option → the basin's latitude band ----
@@ -174,6 +172,12 @@ namespace OwMapCreation
         // ---- the defining shape: lock it, then let the engine grow the rest ----
         protected override void GenerateLand()
         {
+            // The design is LEFT-RIGHT symmetric (sea on one edge, range on
+            // the other) — a 180-degree point mirror cannot hold it. If the
+            // host picked Point Symmetry, coerce to the centerline mirror so
+            // the duel stays fair instead of generating a scrambled map.
+            if (mirrorType == MirrorMapType.CENTERPOINT)
+                mirrorType = MirrorMapType.CENTERLINE;
             LockCaldera();
             base.GenerateLand();
         }
@@ -222,7 +226,16 @@ namespace OwMapCreation
             // the opposite edge; the bay drains from the sea edge inland toward the
             // range. `d` = rows from the sea edge, so the same logic works flipped.
             mSeaSouth = random.Next(2) == 0;
-            int seaBand = 6 + random.Next(3);                // base sea depth, 6–8 (always ≥5)
+            // ---- dimension-adaptive knobs: everything below derives from the
+            // FINAL W/H (any size, any aspect ratio) -------------------------
+            int seaBase = Math.Max(5, Math.Min(8, H / 7));   // ultrawide 5 … tall 8
+            int seaBand = seaBase + random.Next(3);          // wobbles per game (always ≥5)
+            int rangeMax = Math.Max(4, Math.Min(7, H / 6));  // shallower range on squat maps
+            int rangeMin = Math.Max(2, rangeMax - 4);
+            mRangeMax = rangeMax;
+            mBandLo = H - (rangeMax + 6);                    // piedmont band floor
+            mShelfD = H - (H >= 36 ? 8 : 6);                 // no-site shelf by the range
+            mPerSide = Math.Max(5, Math.Min(13, W * H / 320));  // site target per side
             // exactly ONE spur per side, framing the central corridor: the bay,
             // the island, the highland prize and both forward sites all sit
             // BETWEEN the mirrored spurs.
@@ -260,7 +273,8 @@ namespace OwMapCreation
             {
                 rwob += (random.Next(3) - 1) * 0.9;
                 rwob = Math.Max(-1.5, Math.Min(3.5, rwob));
-                rangeHalf[k] = Math.Max(3, Math.Min(7, 4 + (int)Math.Round(rwob)));
+                rangeHalf[k] = Math.Max(rangeMin, Math.Min(rangeMax,
+                    (rangeMin + 1) + (int)Math.Round(rwob)));
             }
 
             // VOLCANIC HALF-ISLAND pressed against the sea edge: the cone juts
@@ -381,6 +395,7 @@ namespace OwMapCreation
         private bool mSeaSouth;
         private double mSpurOffFrac;
         private double[] mSpurAt;
+        private int mRangeMax = 7, mBandLo, mShelfD, mPerSide = 6;
         private int mIslandX, mIslandY;
         private double mIslandR;
 
@@ -725,7 +740,8 @@ namespace OwMapCreation
             for (int y = 0; y < H; y++)
             {
                 int d = mSeaSouth ? y : (H - 1 - y);          // rows from the sea edge
-                if (d < H - 13 || d >= H - 3) continue;       // the band below the range
+                int lo = mBandLo > 0 ? mBandLo : H - 13;
+                if (d < lo || d >= H - 3) continue;           // the band below the range
                 for (int x = 0; x < W; x++)
                 {
                     TileData t = GetTile(x, y);
@@ -748,7 +764,7 @@ namespace OwMapCreation
             bool InPlain(int idx)
             {
                 int d = mSeaSouth ? (idx / W) : (H - 1 - idx / W);
-                return d < H - 13;
+                return d < (mBandLo > 0 ? mBandLo : H - 13);
             }
             bool Organic(TileData t) => t.Height.Equals(MOUNTAIN_HEIGHT)
                 && (mOurMountain == null || !mOurMountain[t.ID]);
@@ -834,7 +850,7 @@ namespace OwMapCreation
         {
             if (x < 3 || x >= MapWidth - 3 || y < 2 || y >= MapHeight - 2) return false;
             int d = mSeaSouth ? y : (MapHeight - 1 - y);     // rows from the sea edge
-            if (d >= MapHeight - 8) return false;            // never wedged against the range
+            if (d >= (mShelfD > 0 ? mShelfD : MapHeight - 8)) return false;  // never wedged against the range
             if (mReach != null && mReach[y * MapWidth + x] != mMainComp) return false;  // land-reachable from the caps
             if (!allowCorridor && InsideSpurFrame(x, y)) return false;  // corridor = prizes only
             if (!allowCorridor && !OpenGround(x, y)) return false;      // no rock-pocket sites
@@ -874,7 +890,7 @@ namespace OwMapCreation
             if (OnIsland(x, y)) return false;            // the island prize is placed deliberately
             if (InsideSpurFrame(x, y)) return false;     // the corridor holds only the prizes
             int d = mSeaSouth ? y : (MapHeight - 1 - y);
-            if (d >= MapHeight - 8) return false;        // never wedged on the range shelf
+            if (d >= (mShelfD > 0 ? mShelfD : MapHeight - 8)) return false;  // never wedged on the range shelf
             if (!OpenGround(x, y)) return false;         // no rock-pocket sites
             return base.IsValidCitySite(pCitySite, bCheckAdjacent);
         }
@@ -1047,7 +1063,7 @@ namespace OwMapCreation
                     if (GetTile(x, y).CitySite.Equals(none)) continue;
                     int dSea = mSeaSouth ? y : (H - 1 - y);
                     if (x < 3 || x > W / 2 - 3 || y < 2 || y >= H - 2 || OnIsland(x, y)
-                        || dSea >= H - 8                     // engine sites on the range shelf
+                        || dSea >= (mShelfD > 0 ? mShelfD : H - 8)   // engine sites on the range shelf
                         || InsideSpurFrame(x, y)             // the corridor is prizes-only
                         || !OpenGround(x, y)                 // boxed into late-grown rock
                         || (mReach != null && mReach[y * W + x] != mMainComp))   // or cut off by land
@@ -1077,15 +1093,15 @@ namespace OwMapCreation
                 int worst = -1; double wd = double.MaxValue;
                 for (int i = 0; i < sites.Count; i++)
                 { double nd = nearest(i); if (nd < wd) { wd = nd; worst = i; } }
-                if (sites.Count <= 7 && wd >= SITE_SPACE) break;
+                if (sites.Count <= mPerSide + 1 && wd >= SITE_SPACE) break;
                 GetTile(sites[worst][0], sites[worst][1]).CitySite = none;
                 sites.RemoveAt(worst);
             }
 
             // PAD up to 6 per side if short — at the FULL engine distance (8) from
             // everything including mirrors and prizes; never cramming below it.
-            for (int y = 2; y < H - 2 && sites.Count < 7; y++)
-                for (int x = 3; x <= W / 2 - 3 && sites.Count < 7; x++)
+            for (int y = 2; y < H - 2 && sites.Count < mPerSide + 1; y++)
+                for (int x = 3; x <= W / 2 - 3 && sites.Count < mPerSide + 1; x++)
                 {
                     if (OnIsland(x, y) || !Foundable(x, y, none)) continue;
                     int mx = (y % 2 == 0) ? (W - 1 - x) : (W - x);
@@ -1259,12 +1275,13 @@ namespace OwMapCreation
             int named = 2;                                       // highland + island
             for (int i = 0; i < wsites.Count; i++)
                 if (kind[i] == 2 || kind[i] == 3) named += 2;    // site + its mirror
-            // 5 tribes-in-use buy a 10-settlement budget, which covers even an
-            // 18-site map (2 prizes + 2 forward + 3 side sites per side). The
-            // guard below is a never-expected safety valve.
+            // 5 tribes-in-use buy a 10-settlement budget — covers every duel
+            // roll (side tribes keep 2-3 sites). On BIGGER map sizes the
+            // extra sites beyond the budget become additional barbarian camps
+            // (mirrored pairs): a wilder frontier, never free giveaways.
             int budget = 2 * (tribesToUse != null ? tribesToUse.Count : 5);
             for (int i = wsites.Count - 1; i >= 0 && named > budget; i--)
-                if (kind[i] == 2) { role[i] = null; kind[i] = 0; named -= 2; }
+                if (kind[i] == 2) { role[i] = barbs; kind[i] = 1; named -= 2; }
 
             // apply + mirror EXACTLY (same role; side tribe west↔east)
             for (int i = 0; i < wsites.Count; i++)
