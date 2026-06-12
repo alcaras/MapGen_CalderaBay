@@ -652,7 +652,6 @@ class CalderaBayConfigs(unittest.TestCase):
         ("wide duel", ["--size", "smallest", "--mirror", "--aspect-ratio", "wide"]),
         ("ultrawide duel", ["--size", "smallest", "--mirror", "--aspect-ratio", "ultrawide"]),
         ("tiny square", ["--size", "tiny", "--mirror"]),
-        ("point-sym duel", ["--size", "smallest", "--point-symmetry"]),
     ]
 
     def test_configs(self):
@@ -703,6 +702,131 @@ class CalderaBayConfigs(unittest.TestCase):
             if mis > 14:
                 problems.append(f"{name}: {mis} mirror mismatches")
         self.assertEqual(problems, [], "config problems:\n" + "\n".join(problems))
+
+
+class CalderaBayPointSym(unittest.TestCase):
+    """The TRUE point-symmetric variant (Mirror + Point Symmetry): the frame
+    flips across the seam — sea SW + NE, ranges NW + SE with gorges at the
+    strait mouths, one S-shaped strait through a central lagoon, ONE central
+    island with a rotational volcano PAIR and TWO prize sites, two highland
+    prizes at opposite seam ends. Each half is its own continent."""
+    SEEDS = (5, 9)
+
+    @classmethod
+    def setUpClass(cls):
+        cls.maps = []
+        for seed in cls.SEEDS:
+            out = OUT / f"ps_{seed}"
+            out.mkdir(parents=True, exist_ok=True)
+            for f in out.glob("*.xml"):
+                f.unlink()
+            subprocess.run(
+                [str(OW), "--mod", str(ROOT / "mod"), "--script", "CalderaBay",
+                 "--size", "smallest", "--players", "2", "--seed", str(seed),
+                 "--mirror", "--point-symmetry", "--map-option",
+                 "MAP_OPTIONS_MULTI_CALDERA_CLIMATE=MAP_OPTION_CALDERA_TEMPERATE",
+                 "--output", str(out)],
+                cwd=ROOT, capture_output=True, text=True)
+            xmls = sorted(out.glob("*.xml"))
+            if xmls:
+                cls.maps.append((seed, ET.parse(xmls[0]).getroot()))
+        if len(cls.maps) < len(cls.SEEDS):
+            raise AssertionError("point-sym generation failed")
+
+    def test_point_symmetry(self):
+        problems = []
+        for seed, root in self.maps:
+            w = int(root.attrib["MapWidth"])
+            tiles = root.findall("Tile")
+            h = len(tiles) // w
+
+            def rot(x, y):
+                return (w - 1 - x, h - 1 - y)
+
+            def wat(x, y):
+                return _t(tiles[y * w + x], "Terrain") == "TERRAIN_WATER"
+            # terrain invariant under the 180-degree rotation
+            mis = sum(1 for y in range(h) for x in range(w // 2)
+                      if _t(tiles[y * w + x], "Terrain")
+                      != _t(tiles[rot(x, y)[1] * w + rot(x, y)[0]], "Terrain"))
+            if mis > 8:
+                problems.append(f"seed {seed}: {mis} rotation mismatches")
+            # both edges: part sea, part range (the frame flips at the seam)
+            for row in (0, h - 1):
+                sea = sum(1 for x in range(w) if wat(x, row))
+                if not w * 0.25 < sea < w * 0.8:
+                    problems.append(f"seed {seed}: edge row {row} sea={sea}")
+            # ONE central island, TWO volcanoes on it, TWO prize sites >=8 apart
+            volcs = [(i % w, i // w) for i, t in enumerate(tiles)
+                     if _t(t, "Height") == "HEIGHT_VOLCANO"]
+            if len(volcs) != 2:
+                problems.append(f"seed {seed}: {len(volcs)} volcanoes")
+                continue
+            isl, stack = set(), [volcs[0]]
+            while stack:
+                cx, cy = stack.pop()
+                if (cx, cy) in isl or not (0 <= cx < w and 0 <= cy < h) or wat(cx, cy):
+                    continue
+                isl.add((cx, cy))
+                stack.extend(neighbors(cx, cy))
+            if volcs[1] not in isl:
+                problems.append(f"seed {seed}: volcanoes on different landmasses")
+            isites = [(x, y) for x, y in isl
+                      if tiles[y * w + x].find("CitySite") is not None]
+            if len(isites) != 2:
+                problems.append(f"seed {seed}: {len(isites)} island sites")
+            elif hexdist(isites[0], isites[1]) < 8:
+                problems.append(f"seed {seed}: island sites only "
+                                f"{hexdist(isites[0], isites[1])} apart")
+            # boat-only: the island keeps its deep moat to every mainland
+            mset = {(i % w, i // w) for i, t in enumerate(tiles)
+                    if not wat(i % w, i // w) and (i % w, i // w) not in isl}
+            gap = min(hexdist(a, b) for a in isl for b in mset)
+            if gap < 6:
+                problems.append(f"seed {seed}: island moat only {gap}")
+            # the strait: open water from the south edge to the north edge
+            seen, stack = set(), [(x, 0) for x in range(w) if wat(x, 0)]
+            while stack:
+                cx, cy = stack.pop()
+                if (cx, cy) in seen or not (0 <= cx < w and 0 <= cy < h) or not wat(cx, cy):
+                    continue
+                seen.add((cx, cy))
+                stack.extend(neighbors(cx, cy))
+            if not any((x, h - 1) in seen for x in range(w)):
+                problems.append(f"seed {seed}: the strait does not connect the seas")
+            # every site sits with its rotational partner; each start reaches
+            # every non-island site of its OWN half by land
+            sites = [(i % w, i // w) for i, t in enumerate(tiles)
+                     if t.find("CitySite") is not None]
+            sset = set(sites)
+            for s2 in sites:
+                if rot(*s2) not in sset:
+                    problems.append(f"seed {seed}: site {s2} has no rotational partner")
+            if not 12 <= len(sites) <= 18:
+                problems.append(f"seed {seed}: {len(sites)} sites")
+            starts = [(int(p.attrib["X"]), int(p.attrib["Y"]))
+                      for p in root.findall("./PlayerStarts/PlayerStart")]
+            for sx, sy in starts:
+                seen2, stack = set(), [(sx, sy)]
+                while stack:
+                    cx, cy = stack.pop()
+                    if (cx, cy) in seen2 or not (0 <= cx < w and 0 <= cy < h):
+                        continue
+                    if wat(cx, cy) or _t(tiles[cy * w + cx], "Height") in (
+                            "HEIGHT_MOUNTAIN", "HEIGHT_VOLCANO"):
+                        continue
+                    seen2.add((cx, cy))
+                    stack.extend(neighbors(cx, cy))
+                # the PRIZES are amphibious objectives here: the island by
+                # its moat, and the two highlands sit at the strait mouths
+                # behind spur+lagoon — boat-reachable, not land-connected
+                half = [s2 for s2 in sites if (s2[0] < w // 2) == (sx < w // 2)
+                        and s2 not in isl
+                        and abs(s2[0] - (w - 1) / 2) >= 7]
+                miss = [s2 for s2 in half if s2 not in seen2]
+                if miss:
+                    problems.append(f"seed {seed}: start ({sx},{sy}) cannot reach {miss}")
+        self.assertEqual(problems, [], "point-sym problems:\n" + "\n".join(problems))
 
 
 if __name__ == "__main__":

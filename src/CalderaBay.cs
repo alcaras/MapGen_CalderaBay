@@ -31,6 +31,8 @@ namespace OwMapCreation
                                             // 72x28 ultrawide, Tiny 58x58, ...)
             if ((mapParameters.iWidth & 1) == 1)
                 mapParameters.iWidth--;     // the stagger mirror needs even W
+            if ((mapParameters.iHeight & 1) == 1)
+                mapParameters.iHeight--;    // the point rotation needs even H
         }
 
         // ---- Climate (latitude) map option → the basin's latitude band ----
@@ -45,8 +47,9 @@ namespace OwMapCreation
                 if (c == (int)infos.getType<MapOptionType>("MAP_OPTION_CALDERA_MEDITERRANEAN")) return 0;
                 if (c == (int)infos.getType<MapOptionType>("MAP_OPTION_CALDERA_TEMPERATE")) return 1;
                 if (c == (int)infos.getType<MapOptionType>("MAP_OPTION_CALDERA_NORTHERN")) return 2;
+                return -1;                       // explicit RANDOM → engine latitudes
             }
-            return -1;
+            return 1;                            // option not set → TEMPERATE default
         }
         private short ClimateLat(short med, short temp, short north, short rand)
         {
@@ -172,12 +175,6 @@ namespace OwMapCreation
         // ---- the defining shape: lock it, then let the engine grow the rest ----
         protected override void GenerateLand()
         {
-            // The design is LEFT-RIGHT symmetric (sea on one edge, range on
-            // the other) — a 180-degree point mirror cannot hold it. If the
-            // host picked Point Symmetry, coerce to the centerline mirror so
-            // the duel stays fair instead of generating a scrambled map.
-            if (mirrorType == MirrorMapType.CENTERPOINT)
-                mirrorType = MirrorMapType.CENTERLINE;
             LockCaldera();
             base.GenerateLand();
         }
@@ -311,7 +308,7 @@ namespace OwMapCreation
                 for (int y = 0; y < H; y++)
                 {
                     TileData t = GetTile(x, y);
-                    int d = mSeaSouth ? y : (H - 1 - y);      // rows from the sea edge
+                    int d = DSea(x, y);                        // rows from THIS half's sea edge
                     double inf = d / (double)(H - 1);          // 0 sea edge → 1 mountain edge
 
                     // GUARANTEED SEA band on the sea edge, ≥6 deep everywhere (a
@@ -349,8 +346,9 @@ namespace OwMapCreation
                     // unlocked mountains in that band, so only a locked seed
                     // survives there).
                     bool onSpur = false;
+                    int ySpur = (PointMode && !WestHalf(x)) ? (H - 1 - y) : y;   // east frame is rotated
                     for (int i = 0; i < nSpurs && !onSpur; i++)
-                        if (Math.Abs(xs - spurAt[i][y]) < 1.1 && inf > 0.42) onSpur = true;   // ~2-3 wide: solid, not fat
+                        if (Math.Abs(xs - spurAt[i][ySpur]) < 1.1 && inf > 0.42) onSpur = true;   // ~2-3 wide: solid, not fat
                     if (onSpur) { LockLand(t, MOUNTAIN_HEIGHT, TEMPERATE_TERRAIN); continue; }
 
                     if (d >= H - 7)
@@ -367,12 +365,24 @@ namespace OwMapCreation
             // height water ring (its own coast forms there) and a 3-tile
             // height-locked OCEAN moat — far enough from any mainland coast
             // that city borders can never tile-buy a bridge to it.
-            mIslandX = W / 2;
-            mIslandY = mSeaSouth ? islandD : (H - 1 - islandD);
+            if (PointMode)
+            {
+                // the caldera proper: one self-rotational island astride the
+                // exact map centre, mid-strait — contested from both ends
+                mIslandCX = (W - 1) / 2.0;
+                mIslandCY = (H - 1) / 2.0;
+                mIslandX = W / 2; mIslandY = H / 2;
+            }
+            else
+            {
+                mIslandX = W / 2;
+                mIslandY = mSeaSouth ? islandD : (H - 1 - islandD);
+                mIslandCX = mIslandX; mIslandCY = mIslandY;
+            }
             int reachY = (int)Math.Ceiling(mIslandR) + 8;
             int reachX = (int)Math.Ceiling(1.5 * (mIslandR + 6.5)) + 1;
-            for (int dy = -reachY; dy <= reachY; dy++)
-                for (int dx = -reachX; dx <= reachX; dx++)
+            for (int dy = -reachY - 1; dy <= reachY; dy++)
+                for (int dx = -reachX - 1; dx <= reachX; dx++)
                 {
                     int x = mIslandX + dx, y = mIslandY + dy;
                     if (x < 0 || x >= W || y < 0 || y >= H) continue;
@@ -380,7 +390,8 @@ namespace OwMapCreation
                     // the moat's outer shell is rounder than the island (the
                     // coast pass turns ANY land-adjacent water to coast, locks
                     // or not — only raw distance to land keeps the gap deep)
-                    double eOut = Math.Sqrt(Math.Pow(dx / 1.5, 2) + (double)dy * dy);
+                    double ddx = x - mIslandCX, ddy = y - mIslandCY;
+                    double eOut = Math.Sqrt(Math.Pow(ddx / 1.5, 2) + ddy * ddy);
                     TileData t = GetTile(x, y);
                     if (e <= 1.4)
                         LockLand(t, HILL_HEIGHT, TEMPERATE_TERRAIN);   // volcanic slopes (gold-valid)
@@ -393,10 +404,37 @@ namespace OwMapCreation
                 }
         }
         private bool mSeaSouth;
+        // ---- symmetry frame -------------------------------------------------
+        // CENTERLINE (or no mirror): the classic estuary — sea on one edge,
+        // range opposite, everything left-right symmetric about the seam.
+        // CENTERPOINT: the S-STRAIT variant — the same per-tile formulas, but
+        // the frame FLIPS across the seam (west keeps sea-south, the east half
+        // is the 180-degree rotation): the two bay channels overlap mid-map
+        // into one strait from sea to sea, the spurs become its flanking
+        // walls, each range ends at a gorge by the strait mouth, and a single
+        // self-rotational island sits astride the exact centre.
+        private bool PointMode { get { return mirrorType == MirrorMapType.CENTERPOINT; } }
+        private bool WestHalf(int x) { return x < MapWidth / 2; }
+        // rows from THIS tile's own sea edge
+        private int DSea(int x, int y)
+        {
+            bool southSea = PointMode ? (WestHalf(x) == mSeaSouth) : mSeaSouth;
+            return southSea ? y : (MapHeight - 1 - y);
+        }
+        // the engine's pairing: stagger mirror (centerline) or 180-degree
+        // rotation (centerpoint — (W-1-x, H-1-y); with even H the row-parity
+        // flip absorbs the hex stagger, verified against the engine's
+        // centerpointSymmetricTileID)
+        private void MirrorOf(int x, int y, out int mx, out int my)
+        {
+            if (PointMode) { mx = MapWidth - 1 - x; my = MapHeight - 1 - y; }
+            else { mx = (y % 2 == 0) ? (MapWidth - 1 - x) : (MapWidth - x); my = y; }
+        }
         private double mSpurOffFrac;
         private double[] mSpurAt;
         private int mRangeMax = 7, mBandLo, mShelfD, mPerSide = 6;
         private int mIslandX, mIslandY;
+        private double mIslandCX, mIslandCY;
         private double mIslandR;
 
         // ================= gameplay (sites, tribes, prizes) =================
@@ -406,7 +444,7 @@ namespace OwMapCreation
         private const double ISLAND_SX = 2.0;       // horizontal stretch (a wide cone)
         private double IslandE(int x, int y)        // elliptical "radius" from the core
         {
-            double dx = (x - mIslandX) / ISLAND_SX, dy = y - mIslandY;
+            double dx = (x - mIslandCX) / ISLAND_SX, dy = y - mIslandCY;
             return Math.Sqrt(dx * dx + dy * dy);
         }
         private bool OnIsland(int x, int y)
@@ -432,6 +470,7 @@ namespace OwMapCreation
             return ok;
         }
         private int mIslandSiteId = -1, mCentreSiteId = -1;
+        private int mIslandSiteId2 = -1, mCentreSiteId2 = -1;
 
         // The organic prize richness: the engine sorts city sites into rich /
         // moderate / poor (per the player's resource-density option) and rolls
@@ -443,7 +482,8 @@ namespace OwMapCreation
             base.GetCitySiteResourceLevels(citySites, richSites, moderateSites, poorSites);
             foreach (TileData s in citySites)
             {
-                if (s.ID != mIslandSiteId && s.ID != mCentreSiteId) continue;
+                if (s.ID != mIslandSiteId && s.ID != mCentreSiteId
+                    && s.ID != mIslandSiteId2 && s.ID != mCentreSiteId2) continue;
                 moderateSites.Remove(s);
                 poorSites.Remove(s);
                 if (!richSites.Contains(s)) richSites.Add(s);
@@ -459,9 +499,25 @@ namespace OwMapCreation
             // never adopt or place within 2 rows of the sea border
             System.Func<int, bool> clears = (yy) =>
             {
-                int dEdge = mSeaSouth ? yy : (H - 1 - yy);
-                return dEdge >= 2;
+                return Math.Min(yy, H - 1 - yy) >= 2 || DSea(cx, yy) >= 2;
             };
+            if (PointMode)
+            {
+                // canonical site west of the seam; its 180-degree partner is
+                // created by the site mirror (two prize sites >=8 apart on the
+                // one central island — contested from both ends of the strait)
+                for (int rad = 0; rad < 4; rad++)
+                    for (int s2 = -1; s2 <= 1; s2 += 2)
+                    {
+                        int x = cx - 5, y = H / 2 + rad * s2;
+                        if (y < 2 || y >= H - 2) continue;
+                        if (IslandE(x, y) > mIslandR) continue;
+                        TileData t0 = GetTile(x, y);
+                        t0.Terrain = LUSH_TERRAIN; t0.Height = FLAT_HEIGHT;
+                        t0.CitySite = sample; mIslandSiteId = t0.ID; return;
+                    }
+                return;
+            }
             for (int yy = 0; yy < H; yy++)
                 for (int xx = 0; xx < W; xx++)
                     if (clears(yy) && OnIsland(xx, yy) && !GetTile(xx, yy).CitySite.Equals(none))
@@ -522,6 +578,7 @@ namespace OwMapCreation
         {
             RichenAround(mIslandSiteId, 4, 3);
             RichenAround(mCentreSiteId, 4, 4);   // wider: tundra highlands hold nothing
+            // (point mode: the rotated partners receive the mirrored copies)
         }
         private void RichenAround(int siteId, int want, int radius)
         {
@@ -562,8 +619,9 @@ namespace OwMapCreation
                     && TileDist(c[0], c[1], sx, sy) <= 2)
                 {
                     t.Terrain = TEMPERATE_TERRAIN;
-                    int mw = (c[1] % 2 == 0) ? (W - 1 - c[0]) : (W - c[0]);
-                    if (mw > W / 2 && mw < W) GetTile(mw, c[1]).Terrain = TEMPERATE_TERRAIN;
+                    int mw, mwy; MirrorOf(c[0], c[1], out mw, out mwy);
+                    if (mw >= 0 && mw < W && mwy >= 0 && mwy < MapHeight && (mw != c[0] || mwy != c[1]))
+                        GetTile(mwy * W + mw).Terrain = TEMPERATE_TERRAIN;
                 }
                 string pick = ValidResourceFor(t);
                 if (pick == null) continue;
@@ -585,11 +643,13 @@ namespace OwMapCreation
                 }
                 else if (t.Terrain.Equals(WATER_TERRAIN))
                 {
-                    int mxx = (c[1] % 2 == 0) ? (W - 1 - c[0]) : (W - c[0]);
-                    if (mxx > W / 2 && mxx < W && GetTile(mxx, c[1]).Terrain.Equals(WATER_TERRAIN))
+                    int mxx, mxy; MirrorOf(c[0], c[1], out mxx, out mxy);
+                    if (mxx >= 0 && mxx < W && mxy >= 0 && mxy < MapHeight
+                        && (mxx != c[0] || mxy != c[1])
+                        && GetTile(mxy * W + mxx).Terrain.Equals(WATER_TERRAIN))
                     {
-                        GetTile(mxx, c[1]).Resource = R(pick);
-                        if (TileDist(mxx, c[1], sx, sy) <= radius) have++;
+                        GetTile(mxy * W + mxx).Resource = R(pick);
+                        if (TileDist(mxx, mxy, sx, sy) <= radius) have++;
                     }
                 }
             }
@@ -629,6 +689,28 @@ namespace OwMapCreation
         private void SetIslandCaldera()
         {
             int W = MapWidth, H = MapHeight, c = W / 2;
+            if (PointMode)
+            {
+                // no tile is self-symmetric under the 180-degree rotation, so
+                // the caldera is a rotational PAIR of cones mid-island
+                for (int rad = 0; rad < 5; rad++)
+                    for (int s = -1; s <= 1; s += 2)
+                    {
+                        int x = c - 2, y = H / 2 + rad * s;
+                        if (y < 1 || y >= H - 1 || IslandE(x, y) > mIslandR) continue;
+                        TileData t = GetTile(x, y);
+                        if (t.Terrain.Equals(WATER_TERRAIN) || t.Terrain.Equals(URBAN_TERRAIN)) continue;
+                        if (!t.CitySite.Equals(GetTile(0, 0).CitySite)) continue;
+                        int mx, my; MirrorOf(x, y, out mx, out my);
+                        TileData m = GetTile(my * W + mx);
+                        if (m.Terrain.Equals(WATER_TERRAIN) || m.Terrain.Equals(URBAN_TERRAIN)) continue;
+                        if (!m.CitySite.Equals(GetTile(0, 0).CitySite)) continue;
+                        t.Height = VOLCANO_HEIGHT; t.Terrain = T("TERRAIN_ARID");
+                        m.Height = VOLCANO_HEIGHT; m.Terrain = T("TERRAIN_ARID");
+                        return;
+                    }
+                return;
+            }
             for (int rad = 0; rad < 5; rad++)
                 for (int s = -1; s <= 1; s += 2)
                 {
@@ -737,19 +819,17 @@ namespace OwMapCreation
         private void TamePiedmont()
         {
             int W = MapWidth, H = MapHeight;
+            int lo = mBandLo > 0 ? mBandLo : H - 13;
             for (int y = 0; y < H; y++)
-            {
-                int d = mSeaSouth ? y : (H - 1 - y);          // rows from the sea edge
-                int lo = mBandLo > 0 ? mBandLo : H - 13;
-                if (d < lo || d >= H - 3) continue;           // the band below the range
                 for (int x = 0; x < W; x++)
                 {
+                    int d = DSea(x, y);                       // rows from THIS half's sea edge
+                    if (d < lo || d >= H - 3) continue;       // the band below the range
                     TileData t = GetTile(x, y);
                     if (t.Height.Equals(MOUNTAIN_HEIGHT)
                         && (mOurMountain == null || !mOurMountain[t.ID]))
                         t.Height = HILL_HEIGHT;
                 }
-            }
         }
 
         // The engine can also grow a giant ORGANIC massif out in the open plain
@@ -763,7 +843,7 @@ namespace OwMapCreation
             int W = MapWidth, H = MapHeight;
             bool InPlain(int idx)
             {
-                int d = mSeaSouth ? (idx / W) : (H - 1 - idx / W);
+                int d = DSea(idx % W, idx / W);
                 return d < (mBandLo > 0 ? mBandLo : H - 13);
             }
             bool Organic(TileData t) => t.Height.Equals(MOUNTAIN_HEIGHT)
@@ -849,7 +929,7 @@ namespace OwMapCreation
         private bool Foundable(int x, int y, CitySiteType none, bool allowCorridor = false)
         {
             if (x < 3 || x >= MapWidth - 3 || y < 2 || y >= MapHeight - 2) return false;
-            int d = mSeaSouth ? y : (MapHeight - 1 - y);     // rows from the sea edge
+            int d = DSea(x, y);                              // rows from the sea edge
             if (d >= (mShelfD > 0 ? mShelfD : MapHeight - 8)) return false;  // never wedged against the range
             if (mReach != null && mReach[y * MapWidth + x] != mMainComp) return false;  // land-reachable from the caps
             if (!allowCorridor && InsideSpurFrame(x, y)) return false;  // corridor = prizes only
@@ -889,7 +969,7 @@ namespace OwMapCreation
             int x = TileX(pCitySite), y = TileY(pCitySite);
             if (OnIsland(x, y)) return false;            // the island prize is placed deliberately
             if (InsideSpurFrame(x, y)) return false;     // the corridor holds only the prizes
-            int d = mSeaSouth ? y : (MapHeight - 1 - y);
+            int d = DSea(x, y);
             if (d >= (mShelfD > 0 ? mShelfD : MapHeight - 8)) return false;  // never wedged on the range shelf
             if (!OpenGround(x, y)) return false;         // no rock-pocket sites
             return base.IsValidCitySite(pCitySite, bCheckAdjacent);
@@ -942,6 +1022,29 @@ namespace OwMapCreation
             int W = MapWidth, H = MapHeight, x = W / 2;
             CitySiteType none = GetTile(0, 0).CitySite, sample = FirstSiteType(none);
             if (sample.Equals(none)) return;
+            if (PointMode)
+            {
+                // the canonical highland prize sits just west of the seam in
+                // front of the WEST half's range (by its gorge / the strait
+                // mouth); the site mirror seats the partner at the far end
+                bool southSea = mSeaSouth;               // west half's sea side
+                int dirP = southSea ? -1 : 1;
+                int startP = southSea ? (H - 5) : 4;
+                for (int pass = 0; pass < 2; pass++)
+                    for (int k = 0; k < H; k++)
+                    {
+                        int y = startP + dirP * k;
+                        if (y < 0 || y >= H) break;
+                        for (int xx = x - 1; xx >= x - 4; xx--)
+                        {
+                            if (OnIsland(xx, y) || !Foundable(xx, y, none, true)) continue;
+                            if (DSea(xx, y) < 0.55 * (H - 1)) continue;
+                            if (pass == 0 && LandNeighbors(xx, y) < 3) continue;
+                            GetTile(xx, y).CitySite = sample; mCentreSiteId = y * W + xx; return;
+                        }
+                    }
+                return;
+            }
             for (int y = 0; y < H; y++)
             {
                 if ((y % 2) == 0) continue;
@@ -1006,7 +1109,8 @@ namespace OwMapCreation
                     TileData t = GetTile(j);
                     if (t.Terrain.Equals(WATER_TERRAIN) || t.Height.Equals(MOUNTAIN_HEIGHT)
                         || t.Height.Equals(VOLCANO_HEIGHT)) continue;
-                    mReach[j] = id; size++;
+                    mReach[j] = id;
+                    if (j % W < W / 2) size++;   // anchor the main comp WEST
                     int x = j % W, y = j / W; int[] dx, dy; Neigh(y, out dx, out dy);
                     for (int k = 0; k < 6; k++)
                     {
@@ -1014,7 +1118,7 @@ namespace OwMapCreation
                         if (nx >= 0 && nx < W && ny >= 0 && ny < H) st.Push(ny * W + nx);
                     }
                 }
-                if (size > bestSize) { bestSize = size; best = id; }
+                if (size > bestSize) { bestSize = size; best = id; }   // (largest west-anchored below)
                 id++;
             }
             mMainComp = best;
@@ -1042,12 +1146,18 @@ namespace OwMapCreation
                 for (int x = c; x < W; x++)
                     if (!GetTile(x, y).CitySite.Equals(none)) avoid.Add(new[] { x, y });
             BalanceWestSites(avoid);
+            mIslandSiteId2 = mCentreSiteId2 = -1;
             for (int y = 0; y < H; y++)
                 for (int x = 0; x < c; x++)
                 {
                     if (GetTile(x, y).CitySite.Equals(none)) continue;
-                    int mxx = (y % 2 == 0) ? (W - 1 - x) : (W - x);
-                    if (mxx > c && mxx < W) GetTile(mxx, y).CitySite = sample;
+                    int mxx, myy; MirrorOf(x, y, out mxx, out myy);
+                    if (!PointMode && mxx <= c) continue;          // (as before: strictly east)
+                    if (mxx < 0 || mxx >= W || myy < 0 || myy >= H) continue;
+                    GetTile(mxx, myy).CitySite = sample;
+                    int id = y * W + x, mid = myy * W + mxx;
+                    if (id == mIslandSiteId) mIslandSiteId2 = mid;     // the prize PAIRS
+                    if (id == mCentreSiteId) mCentreSiteId2 = mid;     // (point mode)
                 }
         }
 
@@ -1061,7 +1171,9 @@ namespace OwMapCreation
                 for (int x = 0; x < W / 2; x++)
                 {
                     if (GetTile(x, y).CitySite.Equals(none)) continue;
-                    int dSea = mSeaSouth ? y : (H - 1 - y);
+                    if (y * W + x == mIslandSiteId || y * W + x == mCentreSiteId)
+                    { avoid.Add(new[] { x, y }); continue; }        // prizes: fixed, spacing-relevant
+                    int dSea = DSea(x, y);
                     if (x < 3 || x > W / 2 - 3 || y < 2 || y >= H - 2 || OnIsland(x, y)
                         || dSea >= (mShelfD > 0 ? mShelfD : H - 8)   // engine sites on the range shelf
                         || InsideSpurFrame(x, y)             // the corridor is prizes-only
@@ -1129,9 +1241,11 @@ namespace OwMapCreation
             for (int y = 0; y < H; y++)
                 for (int x = 0; x < W; x++)
                 {
-                    int mxx = (y % 2 == 0) ? (W - 1 - x) : (W - x);
-                    if (mxx <= x || mxx >= W) continue;
-                    TileData src = GetTile(x, y), dst = GetTile(mxx, y);
+                    int mxx, myy; MirrorOf(x, y, out mxx, out myy);
+                    if (PointMode) { if (!WestHalf(x)) continue; }
+                    else if (mxx <= x || mxx >= W) continue;
+                    if (mxx < 0 || mxx >= W || myy < 0 || myy >= H) continue;
+                    TileData src = GetTile(x, y), dst = GetTile(myy * W + mxx);
                     dst.Terrain = src.Terrain; dst.Height = src.Height;
                     dst.Vegetation = src.Vegetation; dst.Resource = src.Resource;
                 }
@@ -1211,13 +1325,18 @@ namespace OwMapCreation
             // 4 barb, 4 central, 2+2 side tribes.
             if (mCentreSiteId >= 0) GetTile(mCentreSiteId).TribeSite = centre;
             if (mIslandSiteId >= 0) GetTile(mIslandSiteId).TribeSite = centre;
+            if (mCentreSiteId2 >= 0) GetTile(mCentreSiteId2).TribeSite = centre;
+            if (mIslandSiteId2 >= 0) GetTile(mIslandSiteId2).TribeSite = centre;
 
             CitySiteType noSite = GetTile(0, 0).CitySite;
             var wsites = new List<int[]>();
             for (int y = 0; y < H; y++)
                 for (int x = 0; x < c; x++)
-                    if (!GetTile(x, y).CitySite.Equals(noSite) && !OnIsland(x, y))
-                        wsites.Add(new[] { x, y });
+                {
+                    if (GetTile(x, y).CitySite.Equals(noSite) || OnIsland(x, y)) continue;
+                    if (y * W + x == mIslandSiteId || y * W + x == mCentreSiteId) continue;  // prizes are the centre tribe's
+                    wsites.Add(new[] { x, y });
+                }
             if (wsites.Count == 0) return;
 
             var role = new TribeType?[wsites.Count];   // null = free
@@ -1241,7 +1360,7 @@ namespace OwMapCreation
                 for (int i = 0; i < wsites.Count; i++)
                 {
                     if (i == capIdx || i == freeIdx || role[i] != null) continue;
-                    int dSea = mSeaSouth ? wsites[i][1] : (H - 1 - wsites[i][1]);
+                    int dSea = DSea(wsites[i][0], wsites[i][1]);
                     if (dSea < bestSea) { bestSea = dSea; pick = i; }
                 }
                 if (pick >= 0) { role[pick] = barbs; kind[pick] = 1; }
@@ -1252,7 +1371,7 @@ namespace OwMapCreation
             int remaining = 0;
             for (int i = 0; i < wsites.Count; i++)
                 if (i != capIdx && i != freeIdx && role[i] == null) remaining++;
-            if (remaining >= 3)
+            if (remaining >= 3 && !PointMode)   // point mode: 2 islands + 2 highlands = 4 already
             {
                 // the central tribe's FORWARD site: the corridor holds only the
                 // two prizes, so it's each side's site closest to the seam —
@@ -1291,9 +1410,10 @@ namespace OwMapCreation
                 TribeType who = role[i].Value;
                 TribeType whoEast = (kind[i] == 2) ? east : who;   // only SIDE sites flip tribes
                 GetTile(bx, by).TribeSite = who;
-                int mxx = (by % 2 == 0) ? (W - 1 - bx) : (W - bx);
-                if (mxx > c && mxx < W && !GetTile(mxx, by).CitySite.Equals(noSite))
-                    GetTile(mxx, by).TribeSite = whoEast;
+                int mxx, myy; MirrorOf(bx, by, out mxx, out myy);
+                if (mxx >= c && mxx < W && myy >= 0 && myy < H
+                    && !GetTile(myy * W + mxx).CitySite.Equals(noSite))
+                    GetTile(myy * W + mxx).TribeSite = whoEast;
             }
         }
 
