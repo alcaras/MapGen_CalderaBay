@@ -27,8 +27,12 @@ namespace OwMapCreation
         protected override void SetMapSize()
         {
             base.SetMapSize();
-            mapParameters.iWidth = 64;
-            mapParameters.iHeight = 43;     // tall enough for 14–18 sites with the tall sea + lagoon
+            mapParameters.iWidth = 46;
+            mapParameters.iHeight = 44;     // the STANDARD duel canvas (2025
+                                            // tiles, same as CoastalRainBasin /
+                                            // InlandSea at Duel size) — sites
+                                            // pack near the engine's 8-tile
+                                            // floor, nothing rattles around
         }
 
         // ---- Climate (latitude) map option → the basin's latitude band ----
@@ -384,7 +388,7 @@ namespace OwMapCreation
 
         private TerrainType T(string z) { return infos.getType<TerrainType>(z); }
         private ResourceType R(string z) { return infos.getType<ResourceType>(z); }
-        private const double ISLAND_SX = 2.5;       // horizontal stretch (a wide cone)
+        private const double ISLAND_SX = 2.0;       // horizontal stretch (a wide cone)
         private double IslandE(int x, int y)        // elliptical "radius" from the core
         {
             double dx = (x - mIslandX) / ISLAND_SX, dy = y - mIslandY;
@@ -833,11 +837,31 @@ namespace OwMapCreation
             if (d >= MapHeight - 8) return false;            // never wedged against the range
             if (mReach != null && mReach[y * MapWidth + x] != mMainComp) return false;  // land-reachable from the caps
             if (!allowCorridor && InsideSpurFrame(x, y)) return false;  // corridor = prizes only
+            if (!allowCorridor && !OpenGround(x, y)) return false;      // no rock-pocket sites
             TileData t = GetTile(x, y);
             if (!t.CitySite.Equals(none)) return false;
             if (t.Terrain.Equals(WATER_TERRAIN)) return false;
             if (t.Height.Equals(MOUNTAIN_HEIGHT) || t.Height.Equals(VOLCANO_HEIGHT) || t.Height.Equals(LAKE_HEIGHT)) return false;
             return true;
+        }
+        // a site needs WORKABLE ground around it: heavy rock within hex-4
+        // makes a cramped pocket city — and the west-most one becomes the
+        // CAPITAL (start placement snaps to existing sites, so this is the
+        // only reliable way to keep capitals out of mountain corners).
+        private bool OpenGround(int x, int y)
+        {
+            int mtn = 0, tot = 0;
+            for (int dy = -4; dy <= 4; dy++)
+                for (int dxx = -4; dxx <= 4; dxx++)
+                {
+                    int nx = x + dxx, ny = y + dy;
+                    if (nx < 0 || nx >= MapWidth || ny < 0 || ny >= MapHeight) continue;
+                    if (TileDist(x, y, nx, ny) > 4) continue;
+                    tot++;
+                    TileData n = GetTile(ny * MapWidth + nx);
+                    if (n.Height.Equals(MOUNTAIN_HEIGHT) || n.Height.Equals(VOLCANO_HEIGHT)) mtn++;
+                }
+            return mtn * 25 <= tot * 7;                      // ≤28% mountain within hex-4
         }
         // Engine-native placement steering (the built-in Dota script's
         // pattern): declare invalid spots UP FRONT so the engine's AddCities
@@ -851,12 +875,27 @@ namespace OwMapCreation
             if (InsideSpurFrame(x, y)) return false;     // the corridor holds only the prizes
             int d = mSeaSouth ? y : (MapHeight - 1 - y);
             if (d >= MapHeight - 8) return false;        // never wedged on the range shelf
+            if (!OpenGround(x, y)) return false;         // no rock-pocket sites
             return base.IsValidCitySite(pCitySite, bCheckAdjacent);
         }
         protected override bool IsValidPlayerStart(TileData tile, PlayerType player, int minTeamStartDistance)
         {
             int x = TileX(tile), y = TileY(tile);
             if (OnIsland(x, y) || InsideSpurFrame(x, y)) return false;
+            // no boxed-in capitals: reject spots with heavy rock around them
+            // (a corner pocket behind a massif plays terribly as a start)
+            int mtn = 0, tot = 0;
+            for (int dy = -4; dy <= 4; dy++)
+                for (int dxx = -4; dxx <= 4; dxx++)
+                {
+                    int nx = x + dxx, ny = y + dy;
+                    if (nx < 0 || nx >= MapWidth || ny < 0 || ny >= MapHeight) continue;
+                    if (TileDist(x, y, nx, ny) > 4) continue;
+                    tot++;
+                    TileData n = GetTile(ny * MapWidth + nx);
+                    if (n.Height.Equals(MOUNTAIN_HEIGHT) || n.Height.Equals(VOLCANO_HEIGHT)) mtn++;
+                }
+            if (mtn * 4 > tot) return false;             // >25% mountain within hex-4
             // NEVER require an existing city site here: the base check itself
             // calls IsValidCitySite, which REJECTS occupied site tiles — the
             // two conditions are mutually exclusive, so requiring a site made
@@ -1010,6 +1049,7 @@ namespace OwMapCreation
                     if (x < 3 || x > W / 2 - 3 || y < 2 || y >= H - 2 || OnIsland(x, y)
                         || dSea >= H - 8                     // engine sites on the range shelf
                         || InsideSpurFrame(x, y)             // the corridor is prizes-only
+                        || !OpenGround(x, y)                 // boxed into late-grown rock
                         || (mReach != null && mReach[y * W + x] != mMainComp))   // or cut off by land
                     { GetTile(x, y).CitySite = none; continue; }
                     sites.Add(new[] { x, y });
@@ -1044,8 +1084,8 @@ namespace OwMapCreation
 
             // PAD up to 6 per side if short — at the FULL engine distance (8) from
             // everything including mirrors and prizes; never cramming below it.
-            for (int y = 2; y < H - 2 && sites.Count < 6; y++)
-                for (int x = 3; x <= W / 2 - 3 && sites.Count < 6; x++)
+            for (int y = 2; y < H - 2 && sites.Count < 7; y++)
+                for (int x = 3; x <= W / 2 - 3 && sites.Count < 7; x++)
                 {
                     if (OnIsland(x, y) || !Foundable(x, y, none)) continue;
                     int mx = (y % 2 == 0) ? (W - 1 - x) : (W - x);

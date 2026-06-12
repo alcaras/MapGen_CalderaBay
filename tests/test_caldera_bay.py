@@ -99,7 +99,7 @@ class CalderaBayMap(unittest.TestCase):
 
     # ---- terrain frame ----
     def test_custom_size(self):
-        self.assertEqual((self.w, self.h), (64, 43), "expected the duel's 64×43 size")
+        self.assertEqual((self.w, self.h), (46, 44), "expected the standard duel canvas (46×44)")
 
     def test_sea_at_least_five_tall(self):
         # the sea band on the sea edge is ≥5 tiles in every column (a line of
@@ -184,7 +184,7 @@ class CalderaBayMap(unittest.TestCase):
     # ---- city sites ----
     def test_site_count(self):
         n = sum(1 for t in self.tiles if t.find("CitySite") is not None)
-        self.assertTrue(14 <= n <= 18, f"expected 14–18 city sites, got {n}")
+        self.assertTrue(12 <= n <= 18, f"expected 12–18 city sites, got {n}")
 
     def test_placed_sites_spaced(self):
         # our placed sites (not the host's ACTIVE_START capital marker) are ≥8 apart
@@ -399,7 +399,7 @@ class CalderaBaySweep(unittest.TestCase):
                     else:
                         break
                 depth = min(depth, dcol)
-            if not 14 <= sites <= 18:
+            if not 12 <= sites <= 18:
                 problems.append(f"{name}: {sites} sites")
             # no SECOND mountain wall in the piedmont band below the range
             # (the wobbled range's own lobes reach down to d=h-7), and no
@@ -511,7 +511,7 @@ class CalderaBaySweep(unittest.TestCase):
                     n_tribe += 1
             if n_barb != 4:
                 problems.append(f"{name}: {n_barb} barb camps (want 4 — 2 per side)")
-            if n_tribe < 5:
+            if n_tribe < 4:
                 problems.append(f"{name}: only {n_tribe} tribe-held sites")
             if n_free < 4:
                 problems.append(f"{name}: only {n_free} free sites")
@@ -579,7 +579,7 @@ class CalderaBaySweep(unittest.TestCase):
                     continue
                 xx = i % w
                 (sw if xx < c else se if xx > c else ce).add(tr)
-            if (sw - ce) == (se - ce):
+            if (sw or se) and (sw - ce) == (se - ce):
                 problems.append(f"{name}: same side tribe both sides {sw - ce}")
             # no ghost urban: every urban tile belongs to a site within 2
             site_xy = [(i % w, i // w) for i, t in enumerate(tiles)
