@@ -1252,7 +1252,8 @@ namespace OwMapCreation
         }
 
         // ---- tribes: one tribe per side (different, horse-paired), one centre
-        // tribe. CRITICAL: only tribes the ENGINE actually
+        // tribe (Huns forced to centre — see AssignTribes). CRITICAL: only
+        // tribes the ENGINE actually
         // put in use this game are valid — a site of any other tribe degrades to
         // plain barbarians in-game. So the pool is exactly the distinct tribes
         // base.PlaceTribes() rolled, never a hardcoded list.
@@ -1268,35 +1269,44 @@ namespace OwMapCreation
             base.PlaceTribes();
             int W = MapWidth, H = MapHeight;
             TribeType none = GetTile(0, 0).TribeSite;
+            TribeType huns = infos.getType<TribeType>("TRIBE_HUNS");
             int barb = (int)infos.getType<TribeType>("TRIBE_BARBARIANS");
             int raid = (int)infos.getType<TribeType>("TRIBE_RAIDERS");
             int rebl = (int)infos.getType<TribeType>("TRIBE_REBELS");
+            mHunsRolled = false;
             mTribePool = new List<TribeType>();
             for (int i = 0; i < W * H; i++)
             {
                 TribeType tb = GetTile(i).TribeSite;
                 if (tb.Equals(none)) continue;
+                if ((int)tb == (int)huns) { mHunsRolled = true; continue; }
                 if ((int)tb == barb || (int)tb == raid || (int)tb == rebl) continue;
                 bool seen = false;
                 foreach (TribeType p in mTribePool) if ((int)p == (int)tb) { seen = true; break; }
                 if (!seen) mTribePool.Add(tb);
             }
+            if (mTribePool.Count == 0 && mHunsRolled) mTribePool.Add(huns);
             if (mTribePool.Count == 0) return;   // tribes disabled — keep the engine's camps
             for (int i = 0; i < W * H; i++)      // clear; AssignTribes re-places on final sites
                 if (!GetTile(i).TribeSite.Equals(none)) GetTile(i).TribeSite = none;
         }
         private List<TribeType> mTribePool;
+        private bool mHunsRolled;
 
         // Assign the rolled tribes to FINAL city sites: one mid-board site per
-        // player side (a mirrored pair — different tribes, horse-paired), and a
-        // third distinct tribe holding the contested centre. No tribe gets
-        // special treatment — whatever the game rolled (Huns included) plays
-        // by the same rules.
+        // player side (a mirrored pair — different tribes, horse-paired), and
+        // the centre tribe holding the contested prizes. The HUNS are the one
+        // deliberate special case: the sides get DIFFERENT tribes, and the
+        // Huns are far nastier neighbours than the diplomacy tribes — one
+        // player living beside Huns while the other courts Gauls is an
+        // asymmetric difficulty roll. So when the game rolls them, they take
+        // the CENTRE, where both players face them equally.
         private void AssignTribes()
         {
             if (mTribePool == null || mTribePool.Count == 0) return;
             int W = MapWidth, H = MapHeight, c = W / 2;
             TribeType none = GetTile(0, 0).TribeSite;
+            TribeType huns = infos.getType<TribeType>("TRIBE_HUNS");
 
             // a DIFFERENT same-horse-class pair if one was rolled, else same both sides
             TribeType west = mTribePool[0], east = mTribePool[0];
@@ -1306,7 +1316,8 @@ namespace OwMapCreation
                     if (i != j && IsHorseTribe(mTribePool[i]) == IsHorseTribe(mTribePool[j]))
                     { west = mTribePool[i]; east = mTribePool[j]; found = true; }
             TribeType centre = west;
-            foreach (TribeType p in mTribePool)
+            if (mHunsRolled) centre = huns;
+            else foreach (TribeType p in mTribePool)
                 if ((int)p != (int)west && (int)p != (int)east) { centre = p; break; }
 
             TribeType barbs = infos.getType<TribeType>("TRIBE_BARBARIANS");
