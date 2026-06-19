@@ -496,8 +496,11 @@ class CalderaBaySweep(unittest.TestCase):
                     problems.append(f"{name}: tribe {tr} not on a city site")
                 if any(b in tr for b in ("RAIDER", "REBEL", "ANARCHY")):
                     problems.append(f"{name}: {tr} placed as a camp")
-            # tribe-site distribution: 2-3 barb camps, the rest of the held
-            # sites named tribes, and >=4 free sites (starts + expansions)
+            # tribe-site distribution: barb camps come in a mirrored pair per
+            # side (4 total), but a SPARSE side trims to one each (2 total) so
+            # the side tribe always keeps a settlement once the central tribe
+            # has taken its 3 prizes; the rest of the held sites are named
+            # tribes, and >=4 free sites (starts + expansions)
             n_free = n_barb = n_tribe = 0
             for i, t in enumerate(tiles):
                 if t.find("CitySite") is None:
@@ -509,8 +512,8 @@ class CalderaBaySweep(unittest.TestCase):
                     n_barb += 1
                 else:
                     n_tribe += 1
-            if n_barb != 4:
-                problems.append(f"{name}: {n_barb} barb camps (want 4 — 2 per side)")
+            if n_barb not in (2, 4):
+                problems.append(f"{name}: {n_barb} barb camps (want 4, or 2 on a sparse map — mirrored)")
             if n_tribe < 4:
                 problems.append(f"{name}: only {n_tribe} tribe-held sites")
             if n_free < 4:
@@ -590,17 +593,23 @@ class CalderaBaySweep(unittest.TestCase):
                 xy = (i % w, i // w)
                 if not any(hexdist(xy, s) <= 2 for s in site_xy):
                     problems.append(f"{name}: ghost urban at {xy}")
-            # the corridor between the spurs holds ONLY the two prizes (island
-            # + highland) — every other site stays on the player side of its
-            # spur (the spur line never sits closer than ~6.9 to the seam, so
-            # any non-prize site under xs=7 is inside the frame)
+            # the corridor between the spurs holds ONLY the CENTRAL tribe's
+            # contested prizes (island + highland end prizes + the mid-valley
+            # pair) — every player-side site stays outside its spur (the spur
+            # line never sits closer than ~6.9 to the seam, so any site under
+            # xs=7 is inside the frame). Identify the central tribe by the
+            # highland prize and allow only its sites in there.
             prize = set(isl) if volc else set()
+            ctribe = None
             if cen:
                 prize.add(hp)
+                ctribe = _t(tiles[hp[1] * w + hp[0]], "TribeSite")
             for x, y in site_xy:
                 if (x, y) in prize:
                     continue
                 if abs(x - (w - 1) / 2) < 7:
+                    if ctribe and _t(tiles[y * w + x], "TribeSite") == ctribe:
+                        continue   # a central-tribe prize (the mid-valley pair)
                     problems.append(f"{name}: non-prize site ({x},{y}) between the spurs")
             # no giant detached massif in the open plain: a mountain component
             # reaching below the piedmont band must either run into the range

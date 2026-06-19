@@ -86,12 +86,13 @@ namespace OwMapCreation
             // ensure a pairable foot duo
             for (int i = 0; i < foot.Length && footCount < 2; i++)
                 if (!has(foot[i])) { add(foot[i]); footCount++; }
-            // top up to 5 named tribes total: the game honours ~2 settlements
-            // per tribe-in-use, so 5 tribes buy a 10-settlement budget — room
-            // for the central tribe's 4 plus 2-3 sites per side tribe even on
-            // an 18-site map (we still only PLACE 3 named tribes on the board)
+            // top up to 6 named tribes total: the game honours ~2 settlements
+            // per tribe-in-use, so 6 tribes buy a 12-settlement budget — room
+            // for the central tribe's 6 (island + highland + the mid-valley
+            // pair, all mirrored) plus 2-3 sites per side tribe even on an
+            // 18-site map (we still only PLACE 3 named tribes on the board)
             int guard = 0;
-            while (tribesToUse.Count < 5 && guard++ < 10)
+            while (tribesToUse.Count < 6 && guard++ < 12)
             {
                 string pick = (random.Next(3) == 0 && (!has(horse[0]) || !has(horse[1])))
                     ? (has(horse[0]) ? horse[1] : horse[0])
@@ -239,9 +240,11 @@ namespace OwMapCreation
             int nSpurs = 1;
             double[] spurOff = new double[nSpurs];
             // 0.35–0.40 of W from the map EDGE (= 0.10–0.15 from centre): the
-            // spurs hug the central corridor, the capitals sit in the wide
-            // outer plains, and the 4 central-tribe cities are framed between
-            // the mirrored pair.
+            // spurs hug the central corridor, the capitals sit in the wide outer
+            // plains, and the FOUR contested cities (island + highland end prizes
+            // plus a mid-valley mirror pair) are framed between the mirrored pair.
+            // (Widening the corridor to fit the pair was tried and reverted — it
+            // let SealPockets box a tarn into a walled lake; the pair fits here.)
             spurOff[0] = 0.10 + 0.05 * (random.Next(100) / 100.0);
             mSpurOffFrac = spurOff[0];
 
@@ -467,10 +470,12 @@ namespace OwMapCreation
             bool ok = base.AddCities();
             EnsureIslandCitySite();
             EnsureCentreCitySite();
+            EnsureMidCitySites();
             return ok;
         }
         private int mIslandSiteId = -1, mCentreSiteId = -1;
         private int mIslandSiteId2 = -1, mCentreSiteId2 = -1;
+        private int mMidSiteId = -1, mMidSiteId2 = -1;   // the contested mid-valley pair
 
         // The organic prize richness: the engine sorts city sites into rich /
         // moderate / poor (per the player's resource-density option) and rolls
@@ -483,7 +488,8 @@ namespace OwMapCreation
             foreach (TileData s in citySites)
             {
                 if (s.ID != mIslandSiteId && s.ID != mCentreSiteId
-                    && s.ID != mIslandSiteId2 && s.ID != mCentreSiteId2) continue;
+                    && s.ID != mIslandSiteId2 && s.ID != mCentreSiteId2
+                    && s.ID != mMidSiteId && s.ID != mMidSiteId2) continue;
                 moderateSites.Remove(s);
                 poorSites.Remove(s);
                 if (!richSites.Contains(s)) richSites.Add(s);
@@ -578,6 +584,7 @@ namespace OwMapCreation
         {
             RichenAround(mIslandSiteId, 4, 3);
             RichenAround(mCentreSiteId, 4, 4);   // wider: tundra highlands hold nothing
+            RichenAround(mMidSiteId, 4, 3);      // the mid-valley prize pulls fights inward
             // (point mode: the rotated partners receive the mirrored copies)
         }
         private void RichenAround(int siteId, int want, int radius)
@@ -917,7 +924,8 @@ namespace OwMapCreation
                 }
         }
 
-        // ---- city-site management (14–18 total, ≥8 apart, 2 central prizes) ----
+        // ---- city-site management (14–18 total, ≥8 apart, 3 central prizes:
+        //      island + highland end prizes + a mid-valley contested pair) ----
         private const double SITE_SPACE = 8.0;
 
         private CitySiteType FirstSiteType(CitySiteType none)
@@ -1068,6 +1076,78 @@ namespace OwMapCreation
                     GetTile(x, y).CitySite = sample; mCentreSiteId = y * W + x; return;
                 }
         }
+        // the contested MIDDLE: an extra city-site PAIR seeded into the valley
+        // corridor between the spurs, flanking the central axis — so the middle
+        // isn't just the two end prizes (island + highland) the players fight
+        // over, but a string of cities down the whole valley. Placed
+        // deliberately (bypasses the corridor-is-prizes-only rule), kept RICH,
+        // and held by the central tribe like the other prizes. ONE canonical
+        // west site is seated here; FinalizeSites' mirror seats its partner.
+        private void EnsureMidCitySites()
+        {
+            int W = MapWidth, H = MapHeight, cx = W / 2;
+            CitySiteType none = GetTile(0, 0).CitySite, sample = FirstSiteType(none);
+            if (sample.Equals(none)) return;
+
+            // re-adopt a still-valid prior pick: FinalizeSites re-runs us on the
+            // FINAL terrain, but don't move the site if it's still good. (Can't
+            // use Foundable here — it rejects the tile precisely BECAUSE our own
+            // site already occupies it; check the geometry/reach directly.)
+            if (mMidSiteId >= 0)
+            {
+                int px = mMidSiteId % W, py = mMidSiteId / W;
+                bool stillGood = !GetTile(px, py).CitySite.Equals(none)
+                    && InsideSpurFrame(px, py) && !OnIsland(px, py)
+                    && DSea(px, py) < (mShelfD > 0 ? mShelfD : H - 8)
+                    && (mReach == null || mReach[mMidSiteId] == mMainComp);
+                if (stillGood) return;
+                GetTile(px, py).CitySite = none;   // release the stale pick so the rescan can reuse it
+                mMidSiteId = -1;
+            }
+
+            // scan the corridor for the most CONTESTED foundable tile: west of
+            // the axis (its mirror seats the east partner), inside the spur
+            // frame, on real settleable land, with the pair clearing the engine
+            // min across the axis and a target gap from the two end prizes.
+            // Prefer the tile HUGGING the central axis (the pair closely flanks
+            // the spine of the valley, both players equidistant); among the
+            // most-central column, prefer the one furthest from the end prizes —
+            // i.e. mid-height, the dead centre of the corridor. The prize gap is
+            // relaxed in steps (8 → the engine floor) so the pair still seats on
+            // ULTRAWIDE maps, whose squat valley packs the prizes close together.
+            double cx2 = (W - 1) / 2.0;
+            int bestId = -1;
+            foreach (double minPrize in new[] { 8.0, 7.0, 6.0, 5.0 })
+            {
+                double bestScore = double.NegativeInfinity;
+                for (int y = 2; y < H - 2; y++)
+                    for (int x = cx - 2; x >= 3; x--)
+                    {
+                        if (OnIsland(x, y) || !InsideSpurFrame(x, y)) continue;
+                        if (!Foundable(x, y, none, true)) continue;
+                        if (LandNeighbors(x, y) < 3) continue;      // not a lone rock-walled tile
+                        int mxx, myy; MirrorOf(x, y, out mxx, out myy);
+                        if (mxx < 0 || mxx >= W || myy < 0 || myy >= H) continue;
+                        if (TileDist(x, y, mxx, myy) < SITE_SPACE) continue;   // pair clears 8 across the axis
+                        double dIsl = mIslandSiteId >= 0
+                            ? TileDist(x, y, mIslandSiteId % W, mIslandSiteId / W) : 99;
+                        double dCen = mCentreSiteId >= 0
+                            ? TileDist(x, y, mCentreSiteId % W, mCentreSiteId / W) : 99;
+                        if (dIsl < minPrize || dCen < minPrize) continue;
+                        // central column dominates (heavy −xs term); tie-break to
+                        // the vertical centre by the smaller gap to an end prize.
+                        double score = -100.0 * Math.Abs(x - cx2) + Math.Min(dIsl, dCen);
+                        if (score > bestScore) { bestScore = score; bestId = y * W + x; }
+                    }
+                if (bestId >= 0) break;                              // seated at this gap; don't relax further
+            }
+            if (bestId >= 0)
+            {
+                GetTile(bestId % W, bestId / W).CitySite = sample;
+                mMidSiteId = bestId;
+            }
+        }
+
         private int LandNeighbors(int x, int y)
         {
             int W = MapWidth, H = MapHeight, n = 0;
@@ -1136,17 +1216,18 @@ namespace OwMapCreation
                 for (int x = c; x < W; x++)
                 {
                     int id = y * W + x;
-                    if (id == mIslandSiteId || id == mCentreSiteId) continue;
+                    if (id == mIslandSiteId || id == mCentreSiteId || id == mMidSiteId) continue;
                     if (!GetTile(x, y).CitySite.Equals(none)) GetTile(x, y).CitySite = none;
                 }
             EnsureIslandCitySite();
             EnsureCentreCitySite();
+            EnsureMidCitySites();
             var avoid = new List<int[]>();
             for (int y = 0; y < H; y++)
                 for (int x = c; x < W; x++)
                     if (!GetTile(x, y).CitySite.Equals(none)) avoid.Add(new[] { x, y });
             BalanceWestSites(avoid);
-            mIslandSiteId2 = mCentreSiteId2 = -1;
+            mIslandSiteId2 = mCentreSiteId2 = mMidSiteId2 = -1;
             for (int y = 0; y < H; y++)
                 for (int x = 0; x < c; x++)
                 {
@@ -1158,6 +1239,7 @@ namespace OwMapCreation
                     int id = y * W + x, mid = myy * W + mxx;
                     if (id == mIslandSiteId) mIslandSiteId2 = mid;     // the prize PAIRS
                     if (id == mCentreSiteId) mCentreSiteId2 = mid;     // (point mode)
+                    if (id == mMidSiteId) mMidSiteId2 = mid;           // the mid-valley pair's east half
                 }
         }
 
@@ -1171,7 +1253,8 @@ namespace OwMapCreation
                 for (int x = 0; x < W / 2; x++)
                 {
                     if (GetTile(x, y).CitySite.Equals(none)) continue;
-                    if (y * W + x == mIslandSiteId || y * W + x == mCentreSiteId)
+                    if (y * W + x == mIslandSiteId || y * W + x == mCentreSiteId
+                        || y * W + x == mMidSiteId)
                     { avoid.Add(new[] { x, y }); continue; }        // prizes: fixed, spacing-relevant
                     int dSea = DSea(x, y);
                     if (x < 3 || x > W / 2 - 3 || y < 2 || y >= H - 2 || OnIsland(x, y)
@@ -1323,16 +1406,18 @@ namespace OwMapCreation
             TribeType barbs = infos.getType<TribeType>("TRIBE_BARBARIANS");
 
             // The CENTRAL tribe holds the contested middle kingdom: the highland
-            // prize, the island prize, and (when a side has 7+ sites) one forward
-            // site per side. Layout per side, MIRRORED EXACTLY: capital (free) +
-            // its nearest site (free) + 2 barbarian camps (most coastal) + 1
-            // central-tribe forward site (closest to the centre seam) + the rest
-            // held by that side's tribe. Net on a 16-site map: 2 start, 2 free,
-            // 4 barb, 4 central, 2+2 side tribes.
+            // prize, the island prize, the mid-valley pair, and (when a side has
+            // 7+ sites) one forward site per side. Layout per side, MIRRORED
+            // EXACTLY: capital (free) + its nearest site (free) + 2 barbarian
+            // camps (most coastal) + 1 central-tribe forward site (closest to the
+            // centre seam) + the rest held by that side's tribe. Net on a 16-site
+            // map: 2 start, 2 free, 4 barb, 6 central, 1+1 side tribes.
             if (mCentreSiteId >= 0) GetTile(mCentreSiteId).TribeSite = centre;
             if (mIslandSiteId >= 0) GetTile(mIslandSiteId).TribeSite = centre;
             if (mCentreSiteId2 >= 0) GetTile(mCentreSiteId2).TribeSite = centre;
             if (mIslandSiteId2 >= 0) GetTile(mIslandSiteId2).TribeSite = centre;
+            if (mMidSiteId >= 0) GetTile(mMidSiteId).TribeSite = centre;
+            if (mMidSiteId2 >= 0) GetTile(mMidSiteId2).TribeSite = centre;
 
             CitySiteType noSite = GetTile(0, 0).CitySite;
             var wsites = new List<int[]>();
@@ -1340,7 +1425,8 @@ namespace OwMapCreation
                 for (int x = 0; x < c; x++)
                 {
                     if (GetTile(x, y).CitySite.Equals(noSite) || OnIsland(x, y)) continue;
-                    if (y * W + x == mIslandSiteId || y * W + x == mCentreSiteId) continue;  // prizes are the centre tribe's
+                    if (y * W + x == mIslandSiteId || y * W + x == mCentreSiteId
+                        || y * W + x == mMidSiteId) continue;  // prizes are the centre tribe's
                     wsites.Add(new[] { x, y });
                 }
             if (wsites.Count == 0) return;
@@ -1359,8 +1445,15 @@ namespace OwMapCreation
                 if (d < bestFree) { bestFree = d; freeIdx = i; }
             }
 
-            // two barb camps: the most coastal of the remaining sites
-            for (int b = 0; b < 2; b++)
+            // two barb camps: the most coastal of the remaining sites — but on a
+            // SPARSE side (few sites), trim the barb count so the side tribe
+            // always keeps at least one settlement of its own. The mid-valley
+            // pair pulls two sites into the centre, so scarce maps can otherwise
+            // leave a side with only cap + free + barbs and no own-tribe city.
+            int restCount = wsites.Count - 2;                 // sites after cap + free
+            int barbWant = 2;
+            if (restCount - barbWant < 1) barbWant = Math.Max(0, restCount - 1);
+            for (int b = 0; b < barbWant; b++)
             {
                 int pick = -1, bestSea = int.MaxValue;
                 for (int i = 0; i < wsites.Count; i++)
@@ -1398,6 +1491,7 @@ namespace OwMapCreation
             // 3 tribes in use → exactly 6 named sites survived of our 8). Keep
             // our named-site count within that budget — shed side sites first.
             int named = 2;                                       // highland + island
+            if (mMidSiteId >= 0) named += 2;                      // + the mid-valley pair
             for (int i = 0; i < wsites.Count; i++)
                 if (kind[i] == 2 || kind[i] == 3) named += 2;    // site + its mirror
             // 5 tribes-in-use buy a 10-settlement budget — covers every duel
