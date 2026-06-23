@@ -2,8 +2,16 @@ using System;
 using System.Collections.Generic;
 using TenCrowns.GameCore;
 
-namespace OwMapCreation
-{
+// NOTE: this class lives in the GLOBAL namespace ON PURPOSE. The engine's
+// reflection auto-import (Infos.BuildMapClasses) only registers a mod's C#
+// map script — and therefore only runs its GetCustomOptions* — when the
+// type's namespace is empty, "TenCrowns.GameCore", or exactly equal to the
+// mod's ModName. An empty namespace always passes, in both Old World and the
+// owmapgen headless tool, with no coupling to the install folder name. When
+// this was in "OwMapCreation" the script was skipped by reflection, only the
+// option-less XML mapClass entry registered, and the in-game Point Symmetry /
+// Climate options never appeared. See mapClass-add.xml (FlatLush only).
+//
     // CALDERA BAY — a mirror duel built on the engine's COASTAL RAIN BASIN
     // generator. Instead of stamping a custom height field (fragile, and it
     // fought the engine's rivers/lakes), we LOCK the few defining features — a
@@ -17,9 +25,33 @@ namespace OwMapCreation
         {
         }
 
+        // --- Reflection registration metadata --------------------------------
+        // The engine registers C# map scripts by reflection and resolves these
+        // static methods WITHOUT BindingFlags.FlattenHierarchy — so inherited
+        // (CoastalRainBasin) copies are invisible to that lookup and each script
+        // must redeclare the ones it wants. Without GetName the map shows under
+        // its raw class name; without AllowMirror the Mirror/Point-Symmetry
+        // toggles never appear. (GetCustomOptions* ARE resolved with
+        // FlattenHierarchy, but we still redeclare Single below for Mono safety
+        // and to make the point-symmetry wiring explicit.)
+        public static new string GetName() { return "TEXT_MAPCLASS_CALDERABAY"; }
+        public static new string GetHelp() { return "TEXT_MAPCLASS_CALDERABAY_HELP"; }
+        public static new bool AllowMirror() { return true; }
+        public static new bool IsHidden() { return false; }
+        public static new bool IncludeInRandom() { return false; }
+
         public static new void GetCustomOptionsMulti(List<MapOptionsMultiType> options, Infos infos)
         {
             options.Add(infos.getType<MapOptionsMultiType>("MAP_OPTIONS_MULTI_CALDERA_CLIMATE"));
+        }
+
+        // Exposes MAP_OPTIONS_SINGLE_POINT_SYMMETRY (+ GOOD_PLAYER_START_RESOURCES)
+        // just like the stock Coastal Rain Basin. With Mirror on and exactly two
+        // teams, this is the lobby toggle that switches CENTERLINE (mirror) vs
+        // CENTERPOINT (point) symmetry — i.e. it drives PointMode in this script.
+        public static new void GetCustomOptionsSingle(List<MapOptionsSingleType> options, Infos infos)
+        {
+            CoastalRainBasin.GetCustomOptionsSingle(options, infos);
         }
 
         // A fixed "wide duel" size — chosen so the engine's natural city sites
@@ -1548,4 +1580,3 @@ namespace OwMapCreation
             return (int)t == scy || (int)t == num;
         }
     }
-}

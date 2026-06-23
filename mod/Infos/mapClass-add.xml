@@ -1,23 +1,22 @@
 <?xml version="1.0"?>
-<!-- Register the custom script. The game/owmapgen build their script
-     registry from mapClass entries: <zScriptType> MUST be the C# class
-     name (MapScriptFlatLush) — that is how a display name binds to a
-     class. (<Class> is NOT a real field and is ignored.) <Name> is the
-     text key shown in the New Game map list. bAllowMirror=1 lets the
-     Mirror / Point-symmetry toggles appear in multiplayer. -->
+<!-- FlatLush is registered the simple way: an XML mapClass entry whose
+     <zScriptType> names the C# class. This works, BUT an XML mapClass entry
+     CANNOT carry custom map options (InfoMapClass.Read ignores them) — the
+     engine only attaches a script's GetCustomOptions* when it auto-imports the
+     class by REFLECTION, and reflection only runs for types whose namespace is
+     empty / "TenCrowns.GameCore" / == the mod's ModName.
+
+     Caldera Bay needs its Climate + Point-Symmetry options, so it is NOT listed
+     here: it lives in the global namespace and is registered purely by
+     reflection (see src/CalderaBay.cs, which declares GetName/GetHelp/
+     AllowMirror/GetCustomOptions*). Listing it here too would have created a
+     second, option-less duplicate entry. -->
 <Root>
   <Entry>
     <zType>MAPCLASS_FLATLUSH</zType>
     <Name>TEXT_MAPCLASS_FLATLUSH</Name>
     <Help>TEXT_MAPCLASS_FLATLUSH_HELP</Help>
     <zScriptType>MapScriptFlatLush</zScriptType>
-    <bAllowMirror>1</bAllowMirror>
-  </Entry>
-  <Entry>
-    <zType>MAPCLASS_CALDERABAY</zType>
-    <Name>TEXT_MAPCLASS_CALDERABAY</Name>
-    <Help>TEXT_MAPCLASS_CALDERABAY_HELP</Help>
-    <zScriptType>MapScriptCalderaBay</zScriptType>
     <bAllowMirror>1</bAllowMirror>
   </Entry>
 </Root>
